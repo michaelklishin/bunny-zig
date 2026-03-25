@@ -2,4 +2,4 @@
 
 ## 0.1.0 (in development)
 
-No changes yet.
+Initial version, targets Zig nightly.
