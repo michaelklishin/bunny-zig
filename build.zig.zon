@@ -1,0 +1,24 @@
+.{
+    .name = .bunny,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0xe9dfea05a1ba7d9d,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "README.md",
+        "LICENSE",
+        "LICENSE-APACHE2",
+        "LICENSE-MIT",
+    },
+    .dependencies = .{
+        .tls = .{
+            .url = "https://github.com/ianic/tls.zig/archive/refs/heads/main.tar.gz",
+            .hash = "tls-0.1.0-ER2e0lWpBQBMRW-oQxwuf5xqwPGor7Vs_W_xQdUHx7Qu",
+        },
+    },
+}
