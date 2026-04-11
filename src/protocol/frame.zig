@@ -152,11 +152,11 @@ pub fn decodeFrame(data: []const u8, allocator: Allocator) !?struct { frame: Fra
 test "heartbeat frame roundtrip" {
     var buf: [64]u8 = undefined;
     const encoded = encodeFrame(&buf, .{ .heartbeat = {} });
-    try std.testing.expectEqual(@as(usize, 8), encoded.len);
+    try std.testing.expectEqual(8, encoded.len);
 
     const result = (try decodeFrame(encoded, std.testing.allocator)).?;
     try std.testing.expect(result.frame == .heartbeat);
-    try std.testing.expectEqual(@as(usize, 8), result.consumed);
+    try std.testing.expectEqual(8, result.consumed);
 }
 
 test "method frame roundtrip" {
@@ -169,7 +169,7 @@ test "method frame roundtrip" {
     const encoded = encodeFrame(&buf, .{ .method = .{ .channel = 1, .method = m } });
     const result = (try decodeFrame(encoded, std.testing.allocator)).?;
 
-    try std.testing.expectEqual(@as(u16, 1), result.frame.method.channel);
+    try std.testing.expectEqual(1, result.frame.method.channel);
     try std.testing.expectEqualSlices(u8, "test", result.frame.method.method.basic_publish.exchange);
     try std.testing.expect(result.frame.method.method.basic_publish.mandatory);
 }
@@ -188,10 +188,10 @@ test "header frame roundtrip" {
     } });
     const result = (try decodeFrame(encoded, std.testing.allocator)).?;
 
-    try std.testing.expectEqual(@as(u16, 1), result.frame.header.channel);
-    try std.testing.expectEqual(@as(u64, 100), result.frame.header.body_size);
+    try std.testing.expectEqual(1, result.frame.header.channel);
+    try std.testing.expectEqual(100, result.frame.header.body_size);
     try std.testing.expectEqualSlices(u8, "text/plain", result.frame.header.properties.content_type.?);
-    try std.testing.expectEqual(@as(u8, 2), result.frame.header.properties.delivery_mode.?);
+    try std.testing.expectEqual(2, result.frame.header.properties.delivery_mode.?);
 }
 
 test "body frame roundtrip" {
@@ -203,7 +203,7 @@ test "body frame roundtrip" {
     } });
     const result = (try decodeFrame(encoded, std.testing.allocator)).?;
 
-    try std.testing.expectEqual(@as(u16, 3), result.frame.body.channel);
+    try std.testing.expectEqual(3, result.frame.body.channel);
     try std.testing.expectEqualSlices(u8, payload, result.frame.body.payload);
 }
 
@@ -221,17 +221,17 @@ test "invalid frame end returns error" {
 
 test "channel accessor" {
     const hb = Frame{ .heartbeat = {} };
-    try std.testing.expectEqual(@as(u16, 0), hb.channel());
+    try std.testing.expectEqual(0, hb.channel());
 
     const body = Frame{ .body = .{ .channel = 7, .payload = "x" } };
-    try std.testing.expectEqual(@as(u16, 7), body.channel());
+    try std.testing.expectEqual(7, body.channel());
 }
 
 test "empty body frame roundtrip" {
     var buf: [64]u8 = undefined;
     const encoded = encodeFrame(&buf, .{ .body = .{ .channel = 1, .payload = "" } });
     const result = (try decodeFrame(encoded, std.testing.allocator)).?;
-    try std.testing.expectEqual(@as(usize, 0), result.frame.body.payload.len);
+    try std.testing.expectEqual(0, result.frame.body.payload.len);
 }
 
 test "method frame: exchange declare roundtrip" {
@@ -264,7 +264,7 @@ test "method frame: basic nack roundtrip" {
     const result = (try decodeFrame(encoded, std.testing.allocator)).?;
 
     const nack = result.frame.method.method.basic_nack;
-    try std.testing.expectEqual(@as(u64, 42), nack.delivery_tag);
+    try std.testing.expectEqual(42, nack.delivery_tag);
     try std.testing.expect(nack.multiple);
 }
 

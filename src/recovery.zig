@@ -237,19 +237,19 @@ pub fn nextBackoff(attempt: u32, config: RecoveryConfig) u64 {
 
 test "backoff: initial attempt" {
     const config = RecoveryConfig{};
-    try std.testing.expectEqual(@as(u64, 5_000), nextBackoff(0, config));
+    try std.testing.expectEqual(5_000, nextBackoff(0, config));
 }
 
 test "backoff: exponential growth" {
     const config = RecoveryConfig{};
-    try std.testing.expectEqual(@as(u64, 10_000), nextBackoff(1, config));
-    try std.testing.expectEqual(@as(u64, 20_000), nextBackoff(2, config));
-    try std.testing.expectEqual(@as(u64, 40_000), nextBackoff(3, config));
+    try std.testing.expectEqual(10_000, nextBackoff(1, config));
+    try std.testing.expectEqual(20_000, nextBackoff(2, config));
+    try std.testing.expectEqual(40_000, nextBackoff(3, config));
 }
 
 test "backoff: capped at max" {
     const config = RecoveryConfig{};
-    try std.testing.expectEqual(@as(u64, 60_000), nextBackoff(10, config));
+    try std.testing.expectEqual(60_000, nextBackoff(10, config));
 }
 
 test "topology registry: records and clears" {
@@ -277,10 +277,10 @@ test "topology registry: records and clears" {
         .routing_key = "key",
     });
 
-    try std.testing.expectEqual(@as(usize, 3), reg.entries.items.len);
+    try std.testing.expectEqual(3, reg.entries.items.len);
 
     reg.clear(allocator);
-    try std.testing.expectEqual(@as(usize, 0), reg.entries.items.len);
+    try std.testing.expectEqual(0, reg.entries.items.len);
 }
 
 test "topology registry: skips predeclared exchanges" {
@@ -303,7 +303,7 @@ test "topology registry: skips predeclared exchanges" {
         .internal = false,
     });
 
-    try std.testing.expectEqual(@as(usize, 0), reg.entries.items.len);
+    try std.testing.expectEqual(0, reg.entries.items.len);
 }
 
 test "topology recovery filter: accepts all by default" {
@@ -387,7 +387,7 @@ test "topology registry: channel recording" {
     try reg.recordChannel(allocator, .{ .id = 1, .prefetch_count = 10 });
     try reg.recordChannel(allocator, .{ .id = 2, .confirm_mode = true });
 
-    try std.testing.expectEqual(@as(usize, 2), reg.channels.items.len);
-    try std.testing.expectEqual(@as(u16, 10), reg.channels.items[0].prefetch_count);
+    try std.testing.expectEqual(2, reg.channels.items.len);
+    try std.testing.expectEqual(10, reg.channels.items[0].prefetch_count);
     try std.testing.expect(reg.channels.items[1].confirm_mode);
 }

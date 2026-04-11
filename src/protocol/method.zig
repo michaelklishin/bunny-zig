@@ -1359,8 +1359,8 @@ pub const ConfirmSelect = struct {
 // Tests
 test "method ID lookup roundtrip" {
     const ids = MethodId.connection_start.classAndMethod();
-    try std.testing.expectEqual(@as(u16, 10), ids.class_id);
-    try std.testing.expectEqual(@as(u16, 10), ids.method_id);
+    try std.testing.expectEqual(10, ids.class_id);
+    try std.testing.expectEqual(10, ids.method_id);
 
     const back = MethodId.fromIds(ids.class_id, ids.method_id);
     try std.testing.expectEqual(MethodId.connection_start, back.?);
@@ -1406,7 +1406,7 @@ test "basic_ack encode/decode" {
     const method_id = try reader.readU16();
     const decoded = try Method.decode(class_id, method_id, &reader, std.testing.allocator);
 
-    try std.testing.expectEqual(@as(u64, 42), decoded.basic_ack.delivery_tag);
+    try std.testing.expectEqual(42, decoded.basic_ack.delivery_tag);
     try std.testing.expect(decoded.basic_ack.multiple);
 }
 
@@ -1426,7 +1426,7 @@ test "connection_close encode/decode" {
     const method_id = try reader.readU16();
     const decoded = try Method.decode(class_id, method_id, &reader, std.testing.allocator);
 
-    try std.testing.expectEqual(@as(u16, 200), decoded.connection_close.reply_code);
+    try std.testing.expectEqual(200, decoded.connection_close.reply_code);
     try std.testing.expectEqualSlices(u8, "Normal shutdown", decoded.connection_close.reply_text);
 }
 

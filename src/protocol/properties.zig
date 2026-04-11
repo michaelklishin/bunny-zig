@@ -227,13 +227,13 @@ test "properties encode/decode roundtrip with all fields" {
 
     try std.testing.expectEqualSlices(u8, "application/json", decoded.content_type.?);
     try std.testing.expectEqualSlices(u8, "utf-8", decoded.content_encoding.?);
-    try std.testing.expectEqual(@as(u8, 2), decoded.delivery_mode.?);
-    try std.testing.expectEqual(@as(u8, 5), decoded.priority.?);
+    try std.testing.expectEqual(2, decoded.delivery_mode.?);
+    try std.testing.expectEqual(5, decoded.priority.?);
     try std.testing.expectEqualSlices(u8, "corr-123", decoded.correlation_id.?);
     try std.testing.expectEqualSlices(u8, "reply.queue", decoded.reply_to.?);
     try std.testing.expectEqualSlices(u8, "60000", decoded.expiration.?);
     try std.testing.expectEqualSlices(u8, "msg-456", decoded.message_id.?);
-    try std.testing.expectEqual(@as(u64, 1700000000), decoded.timestamp.?);
+    try std.testing.expectEqual(1700000000, decoded.timestamp.?);
     try std.testing.expectEqualSlices(u8, "order.created", decoded.type.?);
     try std.testing.expectEqualSlices(u8, "guest", decoded.user_id.?);
     try std.testing.expectEqualSlices(u8, "test-app", decoded.app_id.?);
@@ -249,12 +249,12 @@ test "properties encode/decode empty" {
     var reader = WireReader.init(wb.getWritten());
     const decoded = try BasicProperties.decode(&reader, allocator);
 
-    try std.testing.expectEqual(@as(u16, 0), decoded.flags());
+    try std.testing.expectEqual(0, decoded.flags());
 }
 
 test "persistent preset" {
     const p = BasicProperties.persistent;
-    try std.testing.expectEqual(@as(u8, 2), p.delivery_mode.?);
+    try std.testing.expectEqual(2, p.delivery_mode.?);
 }
 
 test "builder pattern" {
@@ -264,7 +264,7 @@ test "builder pattern" {
         .withMessageId("id-1");
 
     try std.testing.expectEqualSlices(u8, "text/plain", p.content_type.?);
-    try std.testing.expectEqual(@as(u8, 2), p.delivery_mode.?);
+    try std.testing.expectEqual(2, p.delivery_mode.?);
     try std.testing.expectEqualSlices(u8, "id-1", p.message_id.?);
     try std.testing.expect(p.priority == null);
 }
@@ -301,7 +301,7 @@ test "properties: single field roundtrips" {
 }
 
 test "properties: flags bitmask correctness" {
-    try std.testing.expectEqual(@as(u16, 0), BasicProperties.default.flags());
+    try std.testing.expectEqual(0, BasicProperties.default.flags());
     try std.testing.expectEqual(constants.prop_delivery_mode, BasicProperties.persistent.flags());
 
     const all = BasicProperties{
@@ -320,7 +320,7 @@ test "properties: flags bitmask correctness" {
         .app_id = "i",
         .cluster_id = "j",
     };
-    try std.testing.expectEqual(@as(u16, 0xFFFC), all.flags());
+    try std.testing.expectEqual(0xFFFC, all.flags());
 }
 
 test "properties: with headers roundtrip" {
@@ -342,8 +342,8 @@ test "properties: with headers roundtrip" {
     var decoded_headers = decoded.headers.?;
     defer decoded_headers.deinit();
 
-    try std.testing.expectEqual(@as(i32, 3), decoded_headers.get("x-retry").?.i32);
-    try std.testing.expectEqual(@as(u8, 2), decoded.delivery_mode.?);
+    try std.testing.expectEqual(3, decoded_headers.get("x-retry").?.i32);
+    try std.testing.expectEqual(2, decoded.delivery_mode.?);
 }
 
 test "fuzz: properties decode does not crash on arbitrary input" {

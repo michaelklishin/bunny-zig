@@ -316,7 +316,7 @@ test "publish with properties" {
     try testing.expect(result != null);
     const msg = result.?;
     try testing.expectEqualSlices(u8, "application/json", msg.properties.content_type.?);
-    try testing.expectEqual(@as(u8, 2), msg.properties.delivery_mode.?);
+    try testing.expectEqual(\1, msg.properties.delivery_mode.?);
     try testing.expectEqualSlices(u8, "msg-001", msg.properties.message_id.?);
 
     try ch.basicAck(msg.delivery_tag, false);
@@ -383,7 +383,7 @@ test "publisher confirms: per-message tracking" {
     }
 
     // All confirms already received because tracking mode waits per message
-    try testing.expectEqual(@as(u64, 10), ch.last_confirmed_seq);
+    try testing.expectEqual(\1, ch.last_confirmed_seq);
 
     _ = try ch.queueDelete("bunny-zig.test.confirms-tracking");
 }
@@ -396,7 +396,7 @@ test "publisher confirms: per-message tracking with backpressure" {
 
     try ch.confirmSelectWithOptions(.{ .tracking = true, .outstanding_limit = 5 });
     try testing.expect(ch.confirm_tracking);
-    try testing.expectEqual(@as(u32, 5), ch.outstanding_limit);
+    try testing.expectEqual(\1, ch.outstanding_limit);
 
     _ = try ch.queueDeclare("bunny-zig.test.confirms-backpressure", .{ .auto_delete = true });
 
@@ -406,7 +406,7 @@ test "publisher confirms: per-message tracking with backpressure" {
         try ch.publishToQueue("bunny-zig.test.confirms-backpressure", msg, .{});
     }
 
-    try testing.expectEqual(@as(u64, 20), ch.last_confirmed_seq);
+    try testing.expectEqual(\1, ch.last_confirmed_seq);
 
     _ = try ch.queueDelete("bunny-zig.test.confirms-backpressure");
 }

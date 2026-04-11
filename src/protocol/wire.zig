@@ -178,12 +178,12 @@ test "WireBuffer basic encoding" {
     wb.writeShortString("hello");
 
     const written = wb.getWritten();
-    try std.testing.expectEqual(@as(usize, 2 + 4 + 1 + 1 + 5), written.len);
+    try std.testing.expectEqual(2 + 4 + 1 + 1 + 5, written.len);
 
     var r = WireReader.init(written);
-    try std.testing.expectEqual(@as(u16, 0x1234), try r.readU16());
-    try std.testing.expectEqual(@as(u32, 0xDEADBEEF), try r.readU32());
-    try std.testing.expectEqual(@as(u8, 0xFF), try r.readByte());
+    try std.testing.expectEqual(0x1234, try r.readU16());
+    try std.testing.expectEqual(0xDEADBEEF, try r.readU32());
+    try std.testing.expectEqual(0xFF, try r.readByte());
     try std.testing.expectEqualSlices(u8, "hello", try r.readShortString());
 }
 
@@ -205,6 +205,6 @@ test "WireBuffer patch" {
     wb.patchU32(patch_pos, 12345);
 
     var r = WireReader.init(wb.getWritten());
-    try std.testing.expectEqual(@as(u32, 12345), try r.readU32());
-    try std.testing.expectEqual(@as(u16, 42), try r.readU16());
+    try std.testing.expectEqual(12345, try r.readU32());
+    try std.testing.expectEqual(42, try r.readU16());
 }

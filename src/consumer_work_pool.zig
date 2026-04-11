@@ -145,5 +145,5 @@ test "work pool: dispatches items" {
             io.sleep(.{ .nanoseconds = 10 * std.time.ns_per_ms }, .boot) catch {};
         }
     }
-    try std.testing.expectEqual(@as(u32, 10), counter.load(.acquire));
+    try std.testing.expectEqual(10, counter.load(.acquire));
 }

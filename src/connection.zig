@@ -880,7 +880,7 @@ test "URI: basic amqp://" {
     const allocator = std.testing.allocator;
     const opts = try ConnectionOptions.fromUri(allocator, "amqp://localhost");
     try std.testing.expectEqualSlices(u8, "localhost", opts.host);
-    try std.testing.expectEqual(@as(u16, 5672), opts.port);
+    try std.testing.expectEqual(5672, opts.port);
     try std.testing.expectEqualSlices(u8, "guest", opts.username);
     try std.testing.expectEqualSlices(u8, "guest", opts.password);
     try std.testing.expectEqualSlices(u8, "/", opts.virtual_host);
@@ -890,13 +890,13 @@ test "URI: amqps:// defaults to port 5671" {
     const allocator = std.testing.allocator;
     const opts = try ConnectionOptions.fromUri(allocator, "amqps://rabbitmq.example.com");
     try std.testing.expectEqualSlices(u8, "rabbitmq.example.com", opts.host);
-    try std.testing.expectEqual(@as(u16, 5671), opts.port);
+    try std.testing.expectEqual(5671, opts.port);
 }
 
 test "URI: explicit port overrides scheme default" {
     const allocator = std.testing.allocator;
     const opts = try ConnectionOptions.fromUri(allocator, "amqps://host:5672");
-    try std.testing.expectEqual(@as(u16, 5672), opts.port);
+    try std.testing.expectEqual(5672, opts.port);
 }
 
 test "URI: username and password" {
@@ -946,7 +946,7 @@ test "URI: full example with all components" {
     const opts = try ConnectionOptions.fromUri(allocator, "amqp://admin:secret@rmq.local:5673/staging");
     defer allocator.free(opts.virtual_host);
     try std.testing.expectEqualSlices(u8, "rmq.local", opts.host);
-    try std.testing.expectEqual(@as(u16, 5673), opts.port);
+    try std.testing.expectEqual(5673, opts.port);
     try std.testing.expectEqualSlices(u8, "admin", opts.username);
     try std.testing.expectEqualSlices(u8, "secret", opts.password);
     try std.testing.expectEqualSlices(u8, "staging", opts.virtual_host);

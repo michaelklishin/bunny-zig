@@ -359,7 +359,7 @@ test "field table encode/decode roundtrip" {
     var decoded = result.table;
     defer decoded.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), decoded.entries.len);
+    try std.testing.expectEqual(3, decoded.entries.len);
     try std.testing.expect(decoded.get("bool_key").?.boolean == true);
     try std.testing.expect(decoded.get("int_key").?.i32 == 42);
     try std.testing.expectEqualSlices(u8, "hello", decoded.get("str_key").?.long_string);
@@ -375,7 +375,7 @@ test "field value void roundtrip" {
 
     const result = try FieldValue.decode(wb.getWritten(), allocator, 0);
     try std.testing.expect(result.value == .void);
-    try std.testing.expectEqual(@as(usize, 1), result.consumed);
+    try std.testing.expectEqual(1, result.consumed);
 }
 
 test "field value timestamp" {
@@ -387,7 +387,7 @@ test "field value timestamp" {
     v.encode(&wb);
 
     const result = try FieldValue.decode(wb.getWritten(), allocator, 0);
-    try std.testing.expectEqual(@as(u64, 1700000000), result.value.timestamp);
+    try std.testing.expectEqual(1700000000, result.value.timestamp);
 }
 
 test "field value decimal" {
@@ -399,8 +399,8 @@ test "field value decimal" {
     v.encode(&wb);
 
     const result = try FieldValue.decode(wb.getWritten(), allocator, 0);
-    try std.testing.expectEqual(@as(u8, 2), result.value.decimal.scale);
-    try std.testing.expectEqual(@as(u32, 12345), result.value.decimal.value);
+    try std.testing.expectEqual(2, result.value.decimal.scale);
+    try std.testing.expectEqual(12345, result.value.decimal.value);
 }
 
 test "empty field table" {
@@ -412,7 +412,7 @@ test "empty field table" {
     table.encode(&wb);
 
     const result = try FieldTable.decode(wb.getWritten(), allocator);
-    try std.testing.expectEqual(@as(usize, 0), result.table.entries.len);
+    try std.testing.expectEqual(0, result.table.entries.len);
 }
 
 test "field value all numeric types roundtrip" {
@@ -480,7 +480,7 @@ test "field value array roundtrip" {
 
     const result = try FieldValue.decode(wb.getWritten(), allocator, 0);
     defer allocator.free(result.value.array);
-    try std.testing.expectEqual(@as(usize, 4), result.value.array.len);
+    try std.testing.expectEqual(4, result.value.array.len);
     try std.testing.expect(result.value.array[0].boolean == true);
     try std.testing.expect(result.value.array[1].i32 == 42);
     try std.testing.expectEqualSlices(u8, "hello", result.value.array[2].long_string);
@@ -510,7 +510,7 @@ test "field table with all value types" {
     var decoded = result.table;
     defer decoded.deinit();
 
-    try std.testing.expectEqual(@as(usize, 7), decoded.entries.len);
+    try std.testing.expectEqual(7, decoded.entries.len);
     try std.testing.expect(decoded.get("a_bool").?.boolean == false);
     try std.testing.expect(decoded.get("b_i32").?.i32 == -999);
     try std.testing.expectEqualSlices(u8, "test string", decoded.get("c_str").?.long_string);
@@ -557,7 +557,7 @@ test "nested field table" {
 
     var inner_val = decoded.get("inner").?.table;
     defer inner_val.deinit();
-    try std.testing.expectEqual(@as(i32, 99), inner_val.get("nested").?.i32);
+    try std.testing.expectEqual(99, inner_val.get("nested").?.i32);
 }
 
 test "fuzz: field table decode does not crash on arbitrary input" {

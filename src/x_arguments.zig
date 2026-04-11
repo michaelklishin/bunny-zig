@@ -199,8 +199,8 @@ test "queue arguments: message TTL and dead letter exchange" {
     var table = try args.build(allocator);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), table.entries.len);
-    try std.testing.expectEqual(@as(i64, 60000), table.get("x-message-ttl").?.i64);
+    try std.testing.expectEqual(3, table.entries.len);
+    try std.testing.expectEqual(60000, table.get("x-message-ttl").?.i64);
     try std.testing.expectEqualSlices(u8, "dlx", table.get("x-dead-letter-exchange").?.long_string);
     try std.testing.expectEqualSlices(u8, "dlq", table.get("x-dead-letter-routing-key").?.long_string);
 }
@@ -214,7 +214,7 @@ test "queue arguments: max length and overflow" {
     var table = try args.build(allocator);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(i64, 1000), table.get("x-max-length").?.i64);
+    try std.testing.expectEqual(1000, table.get("x-max-length").?.i64);
     try std.testing.expectEqualSlices(u8, "reject-publish", table.get("x-overflow").?.long_string);
 }
 
@@ -226,7 +226,7 @@ test "queue arguments: priority queue" {
     var table = try args.build(allocator);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(u8, 10), table.get("x-max-priority").?.u8);
+    try std.testing.expectEqual(10, table.get("x-max-priority").?.u8);
 }
 
 test "queue arguments: single active consumer" {
@@ -251,7 +251,7 @@ test "queue arguments: quorum queue with delivery limit" {
     defer table.deinit();
 
     try std.testing.expectEqualSlices(u8, "quorum", table.get("x-queue-type").?.long_string);
-    try std.testing.expectEqual(@as(i64, 5), table.get("x-delivery-limit").?.i64);
+    try std.testing.expectEqual(5, table.get("x-delivery-limit").?.i64);
     try std.testing.expectEqualSlices(u8, "balanced", table.get("x-queue-leader-locator").?.long_string);
 }
 
@@ -262,7 +262,7 @@ test "queue arguments: empty builds empty table" {
     var table = try args.build(allocator);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), table.entries.len);
+    try std.testing.expectEqual(0, table.entries.len);
 }
 
 test "queue arguments: chaining" {
@@ -273,7 +273,7 @@ test "queue arguments: chaining" {
     var table = try args.build(allocator);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), table.entries.len);
+    try std.testing.expectEqual(3, table.entries.len);
 }
 
 test "queue arguments: delayed queue with retry" {
@@ -287,11 +287,11 @@ test "queue arguments: delayed queue with retry" {
     var table = try args.build(allocator);
     defer table.deinit();
 
-    try std.testing.expectEqual(@as(usize, 4), table.entries.len);
+    try std.testing.expectEqual(4, table.entries.len);
     try std.testing.expectEqualSlices(u8, "failed", table.get("x-delayed-retry-type").?.long_string);
-    try std.testing.expectEqual(@as(i64, 1000), table.get("x-delayed-retry-min").?.i64);
-    try std.testing.expectEqual(@as(i64, 60000), table.get("x-delayed-retry-max").?.i64);
-    try std.testing.expectEqual(@as(i64, 30000), table.get("x-consumer-disconnected-timeout").?.i64);
+    try std.testing.expectEqual(1000, table.get("x-delayed-retry-min").?.i64);
+    try std.testing.expectEqual(60000, table.get("x-delayed-retry-max").?.i64);
+    try std.testing.expectEqual(30000, table.get("x-consumer-disconnected-timeout").?.i64);
 }
 
 test "queue arguments: JMS selector fields as AMQP array" {
@@ -305,12 +305,12 @@ test "queue arguments: JMS selector fields as AMQP array" {
     defer table.deinit();
     defer allocator.free(table.get("x-selector-fields").?.array);
 
-    try std.testing.expectEqual(@as(usize, 2), table.entries.len);
+    try std.testing.expectEqual(2, table.entries.len);
     const arr = table.get("x-selector-fields").?.array;
-    try std.testing.expectEqual(@as(usize, 2), arr.len);
+    try std.testing.expectEqual(2, arr.len);
     try std.testing.expectEqualSlices(u8, "priority", arr[0].long_string);
     try std.testing.expectEqualSlices(u8, "region", arr[1].long_string);
-    try std.testing.expectEqual(@as(i64, 256), table.get("x-selector-field-max-bytes").?.i64);
+    try std.testing.expectEqual(256, table.get("x-selector-field-max-bytes").?.i64);
 }
 
 test "delayed retry type enum values" {
