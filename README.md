@@ -15,7 +15,7 @@ and [`bunny-rs`](https://github.com/michaelklishin/bunny-rs) (Rust).
 
 ## Platform Support
 
- * Zig 0.15.x or later (0.16.0-dev for full TLS 1.2 support via [tls.zig](https://github.com/ianic/tls.zig))
+ * Zig 0.16.0 or later
  * Linux (x86_64, aarch64)
  * macOS (Apple Silicon, Intel)
 

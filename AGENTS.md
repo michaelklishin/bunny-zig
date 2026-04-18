@@ -51,7 +51,7 @@ Unit tests (protocol encoding/decoding, field tables, properties) do not require
 
 ## Code Style
 
- * Target Zig nightly (0.16.0-dev)
+ * Target Zig 0.16.0+
  * Use `std.log` scoped logging for diagnostics
  * Prefer explicit error handling with Zig error unions over panics
  * Use `errdefer` for cleanup on error paths
