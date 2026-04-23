@@ -300,7 +300,6 @@ pub const FieldTable = struct {
         var offset: usize = 4;
         const end: usize = 4 + table_len;
         while (offset < end) {
-            if (offset >= end) break;
             const key_len = data[offset];
             offset += 1;
             if (offset + key_len > end) return error.InsufficientData;

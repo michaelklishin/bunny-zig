@@ -51,10 +51,9 @@ pub fn EventListeners(comptime EventType: type) type {
         pub fn emit(self: *Self, event: EventType) void {
             const io = getIo();
             self.mutex.lockUncancelable(io);
-            const items = self.callbacks.items;
-            self.mutex.unlock(io);
+            defer self.mutex.unlock(io);
 
-            for (items) |cb| {
+            for (self.callbacks.items) |cb| {
                 cb(event);
             }
         }

@@ -2,6 +2,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const types = @import("protocol.zig").types;
+const FieldTable = types.FieldTable;
+
 const log = std.log.scoped(.bunny_recovery);
 
 pub const RecoveryConfig = struct {
@@ -28,6 +31,7 @@ pub const RecordedExchange = struct {
     auto_delete: bool,
     internal: bool,
     channel_id: u16 = 1,
+    arguments: FieldTable = FieldTable.empty,
 };
 
 pub const RecordedQueue = struct {
@@ -37,6 +41,7 @@ pub const RecordedQueue = struct {
     auto_delete: bool,
     server_named: bool,
     channel_id: u16 = 1,
+    arguments: FieldTable = FieldTable.empty,
 };
 
 pub const RecordedBinding = struct {
@@ -44,6 +49,7 @@ pub const RecordedBinding = struct {
     destination: []const u8,
     routing_key: []const u8,
     channel_id: u16 = 1,
+    arguments: FieldTable = FieldTable.empty,
 };
 
 pub const RecordedConsumer = struct {
@@ -100,6 +106,24 @@ pub const TopologyRegistry = struct {
     pub fn recordExchange(self: *TopologyRegistry, allocator: Allocator, ex: RecordedExchange) !void {
         if (ex.name.len == 0) return;
         if (std.mem.startsWith(u8, ex.name, "amq.")) return;
+
+        // Update in place if already recorded
+        for (self.entries.items) |*entry| {
+            switch (entry.*) {
+                .exchange => |*e| if (std.mem.eql(u8, e.name, ex.name)) {
+                    allocator.free(e.exchange_type);
+                    e.exchange_type = try allocator.dupe(u8, ex.exchange_type);
+                    e.durable = ex.durable;
+                    e.auto_delete = ex.auto_delete;
+                    e.internal = ex.internal;
+                    e.channel_id = ex.channel_id;
+                    e.arguments = ex.arguments;
+                    return;
+                },
+                else => {},
+            }
+        }
+
         try self.entries.append(allocator, .{ .exchange = .{
             .name = try allocator.dupe(u8, ex.name),
             .exchange_type = try allocator.dupe(u8, ex.exchange_type),
@@ -107,10 +131,27 @@ pub const TopologyRegistry = struct {
             .auto_delete = ex.auto_delete,
             .internal = ex.internal,
             .channel_id = ex.channel_id,
+            .arguments = ex.arguments,
         } });
     }
 
     pub fn recordQueue(self: *TopologyRegistry, allocator: Allocator, q: RecordedQueue) !void {
+        // Update in place if already recorded
+        for (self.entries.items) |*entry| {
+            switch (entry.*) {
+                .queue => |*existing| if (std.mem.eql(u8, existing.name, q.name)) {
+                    existing.durable = q.durable;
+                    existing.exclusive = q.exclusive;
+                    existing.auto_delete = q.auto_delete;
+                    existing.server_named = q.server_named;
+                    existing.channel_id = q.channel_id;
+                    existing.arguments = q.arguments;
+                    return;
+                },
+                else => {},
+            }
+        }
+
         try self.entries.append(allocator, .{ .queue = .{
             .name = try allocator.dupe(u8, q.name),
             .durable = q.durable,
@@ -118,28 +159,59 @@ pub const TopologyRegistry = struct {
             .auto_delete = q.auto_delete,
             .server_named = q.server_named,
             .channel_id = q.channel_id,
+            .arguments = q.arguments,
         } });
     }
 
     pub fn recordQueueBinding(self: *TopologyRegistry, allocator: Allocator, b: RecordedBinding) !void {
+        // Skip if an identical binding already exists
+        for (self.entries.items) |entry| {
+            switch (entry) {
+                .queue_binding => |existing| if (std.mem.eql(u8, existing.source, b.source) and
+                    std.mem.eql(u8, existing.destination, b.destination) and
+                    std.mem.eql(u8, existing.routing_key, b.routing_key)) return,
+                else => {},
+            }
+        }
+
         try self.entries.append(allocator, .{ .queue_binding = .{
             .source = try allocator.dupe(u8, b.source),
             .destination = try allocator.dupe(u8, b.destination),
             .routing_key = try allocator.dupe(u8, b.routing_key),
             .channel_id = b.channel_id,
+            .arguments = b.arguments,
         } });
     }
 
     pub fn recordExchangeBinding(self: *TopologyRegistry, allocator: Allocator, b: RecordedBinding) !void {
+        // Skip if an identical binding already exists
+        for (self.entries.items) |entry| {
+            switch (entry) {
+                .exchange_binding => |existing| if (std.mem.eql(u8, existing.source, b.source) and
+                    std.mem.eql(u8, existing.destination, b.destination) and
+                    std.mem.eql(u8, existing.routing_key, b.routing_key)) return,
+                else => {},
+            }
+        }
+
         try self.entries.append(allocator, .{ .exchange_binding = .{
             .source = try allocator.dupe(u8, b.source),
             .destination = try allocator.dupe(u8, b.destination),
             .routing_key = try allocator.dupe(u8, b.routing_key),
             .channel_id = b.channel_id,
+            .arguments = b.arguments,
         } });
     }
 
     pub fn recordConsumer(self: *TopologyRegistry, allocator: Allocator, c: RecordedConsumer) !void {
+        // Skip if this consumer tag is already recorded
+        for (self.entries.items) |entry| {
+            switch (entry) {
+                .consumer => |existing| if (std.mem.eql(u8, existing.consumer_tag, c.consumer_tag)) return,
+                else => {},
+            }
+        }
+
         try self.entries.append(allocator, .{ .consumer = .{
             .queue = try allocator.dupe(u8, c.queue),
             .consumer_tag = try allocator.dupe(u8, c.consumer_tag),
@@ -150,6 +222,13 @@ pub const TopologyRegistry = struct {
     }
 
     pub fn recordChannel(self: *TopologyRegistry, allocator: Allocator, ch: RecordedChannel) !void {
+        // Update in place if already recorded
+        for (self.channels.items) |*existing| {
+            if (existing.id == ch.id) {
+                existing.* = ch;
+                return;
+            }
+        }
         try self.channels.append(allocator, ch);
     }
 
@@ -159,23 +238,27 @@ pub const TopologyRegistry = struct {
     }
 
     /// Update queue name in the registry after a server-named queue is redeclared.
-    /// The new_name must be a stable pointer (not into the transport read buffer).
-    pub fn updateQueueName(self: *TopologyRegistry, allocator: Allocator, old_name: []const u8, new_name: []const u8) void {
-        const duped_new = allocator.dupe(u8, new_name) catch return;
-        self.queue_name_map.put(old_name, duped_new) catch {};
+    pub fn updateQueueName(self: *TopologyRegistry, allocator: Allocator, old_name: []const u8, new_name: []const u8) !void {
+        // Free the previous mapped value if overwriting an existing entry
+        if (self.queue_name_map.get(old_name)) |prev| {
+            allocator.free(prev);
+        }
+        const duped_map = try allocator.dupe(u8, new_name);
+        errdefer allocator.free(duped_map);
+        try self.queue_name_map.put(old_name, duped_map);
 
         for (self.entries.items) |*entry| {
             switch (entry.*) {
                 .queue_binding => |*b| {
                     if (std.mem.eql(u8, b.destination, old_name)) {
                         allocator.free(b.destination);
-                        b.destination = allocator.dupe(u8, new_name) catch new_name;
+                        b.destination = try allocator.dupe(u8, new_name);
                     }
                 },
                 .consumer => |*c| {
                     if (std.mem.eql(u8, c.queue, old_name)) {
                         allocator.free(c.queue);
-                        c.queue = allocator.dupe(u8, new_name) catch new_name;
+                        c.queue = try allocator.dupe(u8, new_name);
                     }
                 },
                 else => {},
@@ -367,7 +450,7 @@ test "topology registry: queue name mapping" {
         .channel_id = 1,
     });
 
-    reg.updateQueueName(allocator, "amq.gen-old", "amq.gen-new");
+    try reg.updateQueueName(allocator, "amq.gen-old", "amq.gen-new");
 
     try std.testing.expectEqualSlices(u8, "amq.gen-new", reg.resolveQueueName("amq.gen-old"));
 
@@ -390,4 +473,118 @@ test "topology registry: channel recording" {
     try std.testing.expectEqual(2, reg.channels.items.len);
     try std.testing.expectEqual(10, reg.channels.items[0].prefetch_count);
     try std.testing.expect(reg.channels.items[1].confirm_mode);
+}
+
+test "topology registry: exchange re-declaration updates in place" {
+    const allocator = std.testing.allocator;
+    var reg = TopologyRegistry.init(allocator);
+    defer reg.deinit(allocator);
+
+    try reg.recordExchange(allocator, .{
+        .name = "my-exchange",
+        .exchange_type = "direct",
+        .durable = true,
+        .auto_delete = false,
+        .internal = false,
+    });
+    try reg.recordExchange(allocator, .{
+        .name = "my-exchange",
+        .exchange_type = "fanout",
+        .durable = false,
+        .auto_delete = true,
+        .internal = false,
+    });
+
+    try std.testing.expectEqual(1, reg.entries.items.len);
+    const ex = reg.entries.items[0].exchange;
+    try std.testing.expectEqualSlices(u8, "fanout", ex.exchange_type);
+    try std.testing.expect(!ex.durable);
+    try std.testing.expect(ex.auto_delete);
+}
+
+test "topology registry: queue re-declaration updates in place" {
+    const allocator = std.testing.allocator;
+    var reg = TopologyRegistry.init(allocator);
+    defer reg.deinit(allocator);
+
+    try reg.recordQueue(allocator, .{
+        .name = "my-queue",
+        .durable = true,
+        .exclusive = false,
+        .auto_delete = false,
+        .server_named = false,
+    });
+    try reg.recordQueue(allocator, .{
+        .name = "my-queue",
+        .durable = false,
+        .exclusive = true,
+        .auto_delete = true,
+        .server_named = false,
+    });
+
+    try std.testing.expectEqual(1, reg.entries.items.len);
+    const q = reg.entries.items[0].queue;
+    try std.testing.expect(!q.durable);
+    try std.testing.expect(q.exclusive);
+}
+
+test "topology registry: duplicate bindings are skipped" {
+    const allocator = std.testing.allocator;
+    var reg = TopologyRegistry.init(allocator);
+    defer reg.deinit(allocator);
+
+    try reg.recordQueueBinding(allocator, .{
+        .source = "ex",
+        .destination = "q",
+        .routing_key = "rk",
+    });
+    try reg.recordQueueBinding(allocator, .{
+        .source = "ex",
+        .destination = "q",
+        .routing_key = "rk",
+    });
+    // Different routing key is a distinct binding
+    try reg.recordQueueBinding(allocator, .{
+        .source = "ex",
+        .destination = "q",
+        .routing_key = "other",
+    });
+
+    try std.testing.expectEqual(2, reg.entries.items.len);
+}
+
+test "topology registry: duplicate consumers are skipped" {
+    const allocator = std.testing.allocator;
+    var reg = TopologyRegistry.init(allocator);
+    defer reg.deinit(allocator);
+
+    try reg.recordConsumer(allocator, .{
+        .queue = "q",
+        .consumer_tag = "ctag-1",
+        .no_ack = false,
+        .exclusive = false,
+        .channel_id = 1,
+    });
+    try reg.recordConsumer(allocator, .{
+        .queue = "q",
+        .consumer_tag = "ctag-1",
+        .no_ack = true,
+        .exclusive = false,
+        .channel_id = 1,
+    });
+
+    try std.testing.expectEqual(1, reg.entries.items.len);
+}
+
+test "topology registry: duplicate channel deduplicates by id" {
+    const allocator = std.testing.allocator;
+    var reg = TopologyRegistry.init(allocator);
+    defer reg.deinit(allocator);
+
+    try reg.recordChannel(allocator, .{ .id = 1, .prefetch_count = 10 });
+    try reg.recordChannel(allocator, .{ .id = 1, .prefetch_count = 50, .confirm_mode = true });
+
+    try std.testing.expectEqual(1, reg.channels.items.len);
+    try std.testing.expectEqual(50, reg.channels.items[0].prefetch_count);
+    try std.testing.expect(reg.channels.items[0].confirm_mode);
 }

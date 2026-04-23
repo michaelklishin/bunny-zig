@@ -187,7 +187,7 @@ pub const Method = union(MethodId) {
             .connection_start => .{ .connection_start = try ConnectionStart.decode(reader, allocator) },
             .connection_start_ok => .{ .connection_start_ok = try ConnectionStartOk.decode(reader, allocator) },
             .connection_secure => .{ .connection_secure = try ConnectionSecure.decode(reader) },
-            .connection_secure_ok => .{ .connection_secure_ok = ConnectionSecureOk.decode(reader) },
+            .connection_secure_ok => .{ .connection_secure_ok = try ConnectionSecureOk.decode(reader) },
             .connection_tune => .{ .connection_tune = try ConnectionTune.decode(reader) },
             .connection_tune_ok => .{ .connection_tune_ok = try ConnectionTuneOk.decode(reader) },
             .connection_open => .{ .connection_open = try ConnectionOpen.decode(reader) },
@@ -528,8 +528,8 @@ pub const ConnectionSecureOk = struct {
         wb.writeLongString(self.response);
     }
 
-    pub fn decode(reader: *WireReader) ConnectionSecureOk {
-        return .{ .response = reader.readLongString() catch &.{} };
+    pub fn decode(reader: *WireReader) !ConnectionSecureOk {
+        return .{ .response = try reader.readLongString() };
     }
 };
 
@@ -1162,6 +1162,8 @@ pub const BasicPublish = struct {
     exchange: []const u8 = "",
     routing_key: []const u8 = "",
     mandatory: bool = false,
+    /// Deprecated by RabbitMQ, included for AMQP 0-9-1 wire format compliance.
+    immediate: bool = false,
 
     pub fn encode(self: BasicPublish, wb: *WireBuffer) void {
         wb.writeU16(self.reserved1);
@@ -1169,6 +1171,7 @@ pub const BasicPublish = struct {
         wb.writeShortString(self.routing_key);
         var bits: u8 = 0;
         if (self.mandatory) bits |= 1;
+        if (self.immediate) bits |= 2;
         wb.writeByte(bits);
     }
 
@@ -1182,6 +1185,7 @@ pub const BasicPublish = struct {
             .exchange = exchange,
             .routing_key = rk,
             .mandatory = bits & 1 != 0,
+            .immediate = bits & 2 != 0,
         };
     }
 };
@@ -1393,6 +1397,27 @@ test "basic_publish encode/decode" {
     try std.testing.expectEqualSlices(u8, "my-exchange", decoded.basic_publish.exchange);
     try std.testing.expectEqualSlices(u8, "my.key", decoded.basic_publish.routing_key);
     try std.testing.expect(decoded.basic_publish.mandatory);
+    try std.testing.expect(!decoded.basic_publish.immediate);
+}
+
+test "basic_publish encode/decode with immediate flag" {
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    const m = Method{ .basic_publish = .{
+        .exchange = "ex",
+        .routing_key = "rk",
+        .mandatory = false,
+        .immediate = true,
+    } };
+    m.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const class_id = try reader.readU16();
+    const method_id = try reader.readU16();
+    const decoded = try Method.decode(class_id, method_id, &reader, std.testing.allocator);
+
+    try std.testing.expect(!decoded.basic_publish.mandatory);
+    try std.testing.expect(decoded.basic_publish.immediate);
 }
 
 test "basic_ack encode/decode" {
@@ -1450,4 +1475,154 @@ test "queue_declare encode/decode" {
     try std.testing.expectEqualSlices(u8, "test-queue", decoded.queue_declare.queue);
     try std.testing.expect(decoded.queue_declare.durable);
     try std.testing.expect(!decoded.queue_declare.exclusive);
+}
+
+test "exchange_declare encode/decode" {
+    const allocator = std.testing.allocator;
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    const m = Method{ .exchange_declare = .{
+        .exchange = "test-ex",
+        .exchange_type = "topic",
+        .durable = true,
+        .auto_delete = true,
+        .internal = false,
+    } };
+    m.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const class_id = try reader.readU16();
+    const method_id = try reader.readU16();
+    const decoded = try Method.decode(class_id, method_id, &reader, allocator);
+
+    try std.testing.expectEqualSlices(u8, "test-ex", decoded.exchange_declare.exchange);
+    try std.testing.expectEqualSlices(u8, "topic", decoded.exchange_declare.exchange_type);
+    try std.testing.expect(decoded.exchange_declare.durable);
+    try std.testing.expect(decoded.exchange_declare.auto_delete);
+    try std.testing.expect(!decoded.exchange_declare.internal);
+}
+
+test "channel_close encode/decode" {
+    const allocator = std.testing.allocator;
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    const m = Method{ .channel_close = .{
+        .reply_code = 406,
+        .reply_text = "PRECONDITION_FAILED",
+        .class_id = 60,
+        .method_id = 40,
+    } };
+    m.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const class_id = try reader.readU16();
+    const method_id = try reader.readU16();
+    const decoded = try Method.decode(class_id, method_id, &reader, allocator);
+
+    try std.testing.expectEqual(406, decoded.channel_close.reply_code);
+    try std.testing.expectEqualSlices(u8, "PRECONDITION_FAILED", decoded.channel_close.reply_text);
+    try std.testing.expectEqual(60, decoded.channel_close.class_id);
+    try std.testing.expectEqual(40, decoded.channel_close.method_id);
+}
+
+test "basic_nack encode/decode" {
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    const m = Method{ .basic_nack = .{
+        .delivery_tag = 42,
+        .multiple = true,
+        .requeue = false,
+    } };
+    m.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const class_id = try reader.readU16();
+    const method_id = try reader.readU16();
+    const decoded = try Method.decode(class_id, method_id, &reader, std.testing.allocator);
+
+    try std.testing.expectEqual(42, decoded.basic_nack.delivery_tag);
+    try std.testing.expect(decoded.basic_nack.multiple);
+    try std.testing.expect(!decoded.basic_nack.requeue);
+}
+
+test "basic_consume encode/decode" {
+    const allocator = std.testing.allocator;
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    const m = Method{ .basic_consume = .{
+        .queue = "my-queue",
+        .consumer_tag = "ctag-1",
+        .no_ack = true,
+        .exclusive = false,
+    } };
+    m.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const class_id = try reader.readU16();
+    const method_id = try reader.readU16();
+    const decoded = try Method.decode(class_id, method_id, &reader, allocator);
+
+    try std.testing.expectEqualSlices(u8, "my-queue", decoded.basic_consume.queue);
+    try std.testing.expectEqualSlices(u8, "ctag-1", decoded.basic_consume.consumer_tag);
+    try std.testing.expect(decoded.basic_consume.no_ack);
+    try std.testing.expect(!decoded.basic_consume.exclusive);
+}
+
+test "basic_reject encode/decode" {
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    const m = Method{ .basic_reject = .{
+        .delivery_tag = 99,
+        .requeue = false,
+    } };
+    m.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const class_id = try reader.readU16();
+    const method_id = try reader.readU16();
+    const decoded = try Method.decode(class_id, method_id, &reader, std.testing.allocator);
+
+    try std.testing.expectEqual(99, decoded.basic_reject.delivery_tag);
+    try std.testing.expect(!decoded.basic_reject.requeue);
+}
+
+test "queue_delete encode/decode" {
+    const allocator = std.testing.allocator;
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    const m = Method{ .queue_delete = .{
+        .queue = "old-queue",
+        .if_unused = true,
+        .if_empty = true,
+    } };
+    m.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const class_id = try reader.readU16();
+    const method_id = try reader.readU16();
+    const decoded = try Method.decode(class_id, method_id, &reader, allocator);
+
+    try std.testing.expectEqualSlices(u8, "old-queue", decoded.queue_delete.queue);
+    try std.testing.expect(decoded.queue_delete.if_unused);
+    try std.testing.expect(decoded.queue_delete.if_empty);
+}
+
+test "basic_deliver decode" {
+    // Server-to-client method: encode the payload directly
+    var buf: [256]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    wb.writeShortString("ctag-abc");
+    wb.writeU64(7);
+    wb.writeByte(1); // redelivered
+    wb.writeShortString("amq.direct");
+    wb.writeShortString("test.key");
+
+    var reader = WireReader.init(wb.getWritten());
+    const decoded = try BasicDeliver.decode(&reader);
+
+    try std.testing.expectEqualSlices(u8, "ctag-abc", decoded.consumer_tag);
+    try std.testing.expectEqual(7, decoded.delivery_tag);
+    try std.testing.expect(decoded.redelivered);
+    try std.testing.expectEqualSlices(u8, "amq.direct", decoded.exchange);
+    try std.testing.expectEqualSlices(u8, "test.key", decoded.routing_key);
 }

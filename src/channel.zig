@@ -173,7 +173,7 @@ pub const Channel = struct {
     allocator: Allocator,
     connection: *Connection,
     id: u16,
-    is_open: bool = true,
+    is_open: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
     // RPC synchronization: the reader thread posts responses here
     rpc_mutex: Mutex = .init,
@@ -271,6 +271,8 @@ pub const Channel = struct {
                     .exclusive = opts.exclusive,
                     .auto_delete = opts.auto_delete,
                     .server_named = name.len == 0,
+                    .channel_id = self.id,
+                    .arguments = opts.arguments,
                 }) catch {};
                 break :blk .{
                     .name = ok.queue,
@@ -322,8 +324,6 @@ pub const Channel = struct {
         return self.queueDeclare(name, .{ .durable = true, .arguments = args });
     }
 
-    /// Declare a delayed message queue (Tanzu RabbitMQ).
-    /// Use QueueArguments for Tanzu-specific arguments like delayedRetryType.
     /// Declare a delayed message queue (Tanzu RabbitMQ).
     /// When opts.arguments is empty, x-queue-type is set automatically.
     /// When providing custom arguments via QueueArguments, include
@@ -393,6 +393,8 @@ pub const Channel = struct {
                     .source = exchange,
                     .destination = queue,
                     .routing_key = routing_key,
+                    .channel_id = self.id,
+                    .arguments = arguments,
                 }) catch {};
             },
             .channel_close => |cc| {
@@ -481,6 +483,8 @@ pub const Channel = struct {
                     .durable = opts.durable,
                     .auto_delete = opts.auto_delete,
                     .internal = opts.internal,
+                    .channel_id = self.id,
+                    .arguments = opts.arguments,
                 }) catch {};
             },
             .channel_close => |cc| {
@@ -552,6 +556,7 @@ pub const Channel = struct {
                     .source = source,
                     .destination = destination,
                     .routing_key = routing_key,
+                    .channel_id = self.id,
                 }) catch {};
             },
             .channel_close => |cc| {
@@ -607,7 +612,7 @@ pub const Channel = struct {
             // Backpressure: wait if outstanding count is at the limit
             if (self.confirm_tracking and self.outstanding_limit > 0) {
                 while (self.outstanding_count >= self.outstanding_limit) {
-                    if (!self.is_open) {
+                    if (!self.is_open.load(.acquire)) {
                         self.confirm_mutex.unlock(io);
                         return error.ChannelClosed;
                     }
@@ -638,7 +643,7 @@ pub const Channel = struct {
     /// Return a promise to the pool for reuse.
     pub fn releasePromise(self: *Channel, p: *ConfirmPromise) void {
         p.reset();
-        if (self.promise_pool.items.len < 64) {
+        if (self.promise_pool.items.len < self.connection.options.confirm_promise_pool_size) {
             self.promise_pool.append(self.allocator, p) catch {
                 self.allocator.destroy(p);
             };
@@ -693,6 +698,10 @@ pub const Channel = struct {
                     }
                 }
             },
+            .channel_close => |cc| {
+                try self.handleChannelClose(cc);
+                return error.ChannelClosed;
+            },
             else => return error.ProtocolError,
         }
     }
@@ -745,6 +754,10 @@ pub const Channel = struct {
             .basic_cancel_ok => {
                 _ = self.consumer_callbacks.remove(consumer_tag);
             },
+            .channel_close => |cc| {
+                try self.handleChannelClose(cc);
+                return error.ChannelClosed;
+            },
             else => return error.ProtocolError,
         }
     }
@@ -756,7 +769,7 @@ pub const Channel = struct {
         defer self.delivery_mutex.unlock(io);
 
         while (self.delivery_head >= self.deliveries.items.len) {
-            if (!self.is_open) return null;
+            if (!self.is_open.load(.acquire)) return null;
             self.delivery_signal.waitUncancelable(io, &self.delivery_mutex);
         }
 
@@ -856,16 +869,6 @@ pub const Channel = struct {
         } });
     }
 
-    /// Recover unacknowledged messages.
-    pub fn basicRecover(self: *Channel, requeue: bool) !void {
-        try self.connection.sendMethod(self.id, .{ .basic_recover = .{ .requeue = requeue } });
-        const response = try self.awaitMethod();
-        switch (response) {
-            .basic_recover_ok => {},
-            else => return error.ProtocolError,
-        }
-    }
-
     //
     // Publisher confirms
     //
@@ -903,6 +906,10 @@ pub const Channel = struct {
                     }
                 }
             },
+            .channel_close => |cc| {
+                try self.handleChannelClose(cc);
+                return error.ChannelClosed;
+            },
             else => return error.ProtocolError,
         }
     }
@@ -914,15 +921,25 @@ pub const Channel = struct {
     }
 
     /// Wait for confirms with a timeout (in nanoseconds).
-    pub fn waitForConfirmsTimeout(self: *Channel, _: u64) !bool {
+    pub fn waitForConfirmsTimeout(self: *Channel, timeout_ns: u64) !bool {
         const io = getIo();
+        const start = Io.Timestamp.now(io, .boot);
+        const limit: i96 = @intCast(timeout_ns);
+
         self.confirm_mutex.lockUncancelable(io);
         defer self.confirm_mutex.unlock(io);
 
         const target = self.next_publish_seq_no;
         while (self.last_confirmed_seq < target) {
-            if (!self.is_open) return error.ChannelClosed;
-            self.confirm_signal.waitUncancelable(io, &self.confirm_mutex);
+            if (!self.is_open.load(.acquire)) return error.ChannelClosed;
+            const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
+            if (elapsed >= limit) return error.Timeout;
+            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
+            const epoch = self.confirm_signal.epoch.load(.acquire);
+            self.confirm_mutex.unlock(io);
+            io.futexWaitTimeout(u32, &self.confirm_signal.epoch.raw, epoch, timeout) catch {};
+            self.confirm_mutex.lockUncancelable(io);
         }
 
         return true;
@@ -938,6 +955,10 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .tx_select_ok => {},
+            .channel_close => |cc| {
+                try self.handleChannelClose(cc);
+                return error.ChannelClosed;
+            },
             else => return error.ProtocolError,
         }
     }
@@ -948,6 +969,10 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .tx_commit_ok => {},
+            .channel_close => |cc| {
+                try self.handleChannelClose(cc);
+                return error.ChannelClosed;
+            },
             else => return error.ProtocolError,
         }
     }
@@ -958,6 +983,10 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .tx_rollback_ok => {},
+            .channel_close => |cc| {
+                try self.handleChannelClose(cc);
+                return error.ChannelClosed;
+            },
             else => return error.ProtocolError,
         }
     }
@@ -968,7 +997,7 @@ pub const Channel = struct {
 
     /// Close this channel gracefully.
     pub fn closeChannel(self: *Channel) !void {
-        if (!self.is_open) return;
+        if (!self.is_open.load(.acquire)) return;
 
         self.connection.sendMethod(self.id, .{ .channel_close = .{
             .reply_code = 200,
@@ -976,15 +1005,20 @@ pub const Channel = struct {
             .class_id = 0,
             .method_id = 0,
         } }) catch {
-            self.is_open = false;
+            self.is_open.store(false, .release);
             self.connection.removeChannel(self.id);
             return;
         };
 
         // Wait for close-ok with a short timeout
         _ = self.awaitMethodTimeout(5 * std.time.ns_per_s) catch null;
-        self.is_open = false;
+        self.is_open.store(false, .release);
         self.connection.removeChannel(self.id);
+    }
+
+    /// Whether this channel is open.
+    pub fn isOpen(self: *const Channel) bool {
+        return self.is_open.load(.acquire);
     }
 
     /// Set a consumer work pool for dispatching callback deliveries off the reader thread.
@@ -999,7 +1033,7 @@ pub const Channel = struct {
 
     /// Internal close (called during connection shutdown, does not send to server).
     pub fn closeInternal(self: *Channel) void {
-        self.is_open = false;
+        self.is_open.store(false, .release);
         const io = getIo();
 
         self.delivery_mutex.lockUncancelable(io);
@@ -1101,18 +1135,28 @@ pub const Channel = struct {
                 log.info("consumer cancelled by server on channel {d}", .{self.id});
                 _ = self.consumer_callbacks.remove(cancel.consumer_tag);
                 if (self.on_cancel) |cb| cb(cancel.consumer_tag);
+                self.event_listeners.emit(.{ .consumer_cancelled = cancel.consumer_tag });
             },
-            .channel_close => {
-                // Post as RPC response so the waiting caller sees it
+            .channel_close => |cc| {
+                // Send close-ok immediately from the reader thread
+                self.connection.sendMethod(self.id, .{ .channel_close_ok = {} }) catch {};
+                self.connection.removeChannel(self.id);
+                log.err("channel {d} closed by server: [{d}] {s}", .{ self.id, cc.reply_code, cc.reply_text });
+                // Post as RPC response so any waiting caller sees it
                 self.rpc_mutex.lockUncancelable(getIo());
                 self.rpc_response = m;
                 self.rpc_signal.signal(getIo());
                 self.rpc_mutex.unlock(getIo());
+                self.event_listeners.emit(.{ .closed = .{
+                    .code = cc.reply_code,
+                    .text = cc.reply_text,
+                    .initiated_by_server = true,
+                } });
                 self.closeInternal();
             },
             .channel_flow => |flow| {
-                // Respond to flow control
                 self.connection.sendMethod(self.id, .{ .channel_flow_ok = .{ .active = flow.active } }) catch {};
+                self.event_listeners.emit(.{ .flow = flow.active });
             },
             else => {
                 // RPC response
@@ -1198,13 +1242,26 @@ pub const Channel = struct {
         return self.awaitMethodTimeout(15 * std.time.ns_per_s);
     }
 
-    fn awaitMethodTimeout(self: *Channel, _: u64) !Method {
-        self.rpc_mutex.lockUncancelable(getIo());
-        defer self.rpc_mutex.unlock(getIo());
+    fn awaitMethodTimeout(self: *Channel, timeout_ns: u64) !Method {
+        const io = getIo();
+        const start = Io.Timestamp.now(io, .boot);
+        const limit: i96 = @intCast(timeout_ns);
+
+        self.rpc_mutex.lockUncancelable(io);
+        defer self.rpc_mutex.unlock(io);
 
         while (self.rpc_response == null) {
-            if (!self.is_open) return error.ChannelClosed;
-            self.rpc_signal.waitUncancelable(getIo(), &self.rpc_mutex);
+            if (!self.is_open.load(.acquire)) return error.ChannelClosed;
+            const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
+            if (elapsed >= limit) return error.Timeout;
+            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
+            // Snapshot the epoch, release the mutex, and do a timed futex
+            // wait. This replicates Condition.wait with a timeout bound.
+            const epoch = self.rpc_signal.epoch.load(.acquire);
+            self.rpc_mutex.unlock(io);
+            io.futexWaitTimeout(u32, &self.rpc_signal.epoch.raw, epoch, timeout) catch {};
+            self.rpc_mutex.lockUncancelable(io);
         }
         const response = self.rpc_response.?;
         self.rpc_response = null;
@@ -1218,12 +1275,24 @@ pub const Channel = struct {
 
     /// Wait for content frames (header + body) to be assembled for basic.get-ok.
     fn awaitContent(self: *Channel) !ContentResult {
-        self.rpc_mutex.lockUncancelable(getIo());
-        defer self.rpc_mutex.unlock(getIo());
+        const io = getIo();
+        const timeout_ns: u64 = 30 * std.time.ns_per_s;
+        const start = Io.Timestamp.now(io, .boot);
+        const limit: i96 = @intCast(timeout_ns);
+
+        self.rpc_mutex.lockUncancelable(io);
+        defer self.rpc_mutex.unlock(io);
 
         while (!self.get_ready) {
-            if (!self.is_open) return error.ChannelClosed;
-            self.rpc_signal.waitUncancelable(getIo(), &self.rpc_mutex);
+            if (!self.is_open.load(.acquire)) return error.ChannelClosed;
+            const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
+            if (elapsed >= limit) return error.Timeout;
+            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
+            const epoch = self.rpc_signal.epoch.load(.acquire);
+            self.rpc_mutex.unlock(io);
+            io.futexWaitTimeout(u32, &self.rpc_signal.epoch.raw, epoch, timeout) catch {};
+            self.rpc_mutex.lockUncancelable(io);
         }
 
         return .{
@@ -1232,10 +1301,8 @@ pub const Channel = struct {
         };
     }
 
-    fn handleChannelClose(self: *Channel, cc: method_mod.ChannelClose) !void {
-        self.connection.sendMethod(self.id, .{ .channel_close_ok = {} }) catch {};
-        self.is_open = false;
-        self.connection.removeChannel(self.id);
-        log.err("channel {d} closed by server: [{d}] {s}", .{ self.id, cc.reply_code, cc.reply_text });
-    }
+    /// Called by RPC waiters that received channel_close as their response.
+    /// The reader thread (handleMethod) already sent close-ok, emitted
+    /// the event, and called closeInternal, so this is a no-op.
+    fn handleChannelClose(_: *Channel, _: method_mod.ChannelClose) !void {}
 };

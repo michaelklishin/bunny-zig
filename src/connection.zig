@@ -90,6 +90,10 @@ pub const ConnectionOptions = struct {
     channel_max: u16 = constants.default_channel_max,
     frame_max: u32 = constants.default_frame_max,
     connection_name: ?[]const u8 = null,
+    /// TCP connection timeout in milliseconds, 0 means no timeout
+    connection_timeout_ms: u32 = 15_000,
+    /// Maximum number of publisher confirm promises to cache per channel
+    confirm_promise_pool_size: u16 = 64,
     /// SASL mechanism: "PLAIN" (default) or "EXTERNAL" (x509 certificate auth)
     auth_mechanism: []const u8 = "PLAIN",
     tls: ?TlsOptions = null,
@@ -166,12 +170,14 @@ pub const Connection = struct {
     channel_mutex: Mutex = .init,
 
     // Connection state
-    is_open: bool = false,
+    is_open: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     reader_thread: ?Thread = null,
     heartbeat_thread: ?Thread = null,
     reader_exit: Io.Event = .unset,
     heartbeat_exit: Io.Event = .unset,
     should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    // Monotonic nanosecond timestamp of the last frame received, for missed heartbeat detection
+    last_frame_at: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     write_mutex: Mutex = .init,
 
     // Waiting for RPC responses on channel 0
@@ -216,7 +222,8 @@ pub const Connection = struct {
         };
 
         try conn.performHandshake();
-        conn.is_open = true;
+        conn.is_open.store(true, .release);
+        conn.last_frame_at.store(@intCast(Io.Clock.awake.now(getIo()).nanoseconds), .release);
 
         // Start reader thread
         conn.reader_thread = try Thread.spawn(.{}, readerLoop, .{conn});
@@ -237,8 +244,8 @@ pub const Connection = struct {
 
     /// Close the connection gracefully.
     pub fn close(self: *Connection) void {
-        if (!self.is_open) return;
-        self.is_open = false;
+        // Atomic swap to ensure only one thread executes the close sequence
+        if (self.is_open.cmpxchgStrong(true, false, .acq_rel, .monotonic) != null) return;
 
         // Close all channels internally
         self.channel_mutex.lockUncancelable(getIo());
@@ -248,7 +255,7 @@ pub const Connection = struct {
         }
         self.channel_mutex.unlock(getIo());
 
-        // Send connection.close (best-effort, don't wait for close-ok)
+        // Send connection.close and wait briefly for close-ok
         self.write_mutex.lockUncancelable(getIo());
         self.transport.sendMethod(0, .{ .connection_close = .{
             .reply_code = 200,
@@ -258,12 +265,15 @@ pub const Connection = struct {
         } }) catch {};
         self.write_mutex.unlock(getIo());
 
+        // Wait up to 5 seconds for the server to acknowledge
+        _ = self.waitForRpc(5 * std.time.ns_per_s) catch {};
+
         self.shutdown();
     }
 
     /// Open a new channel on this connection.
     pub fn openChannel(self: *Connection) !*Channel {
-        if (!self.is_open) return error.NotConnected;
+        if (!self.is_open.load(.acquire)) return error.NotConnected;
 
         self.channel_mutex.lockUncancelable(getIo());
         const channel_id = self.next_channel_id;
@@ -448,24 +458,25 @@ pub const Connection = struct {
         while (!self.should_stop.load(.acquire)) {
             const frame = self.transport.readFrame(self.allocator) catch |err| {
                 if (self.should_stop.load(.acquire)) break;
-                log.err("reader loop error: {}", .{err});
+                log.warn("reader loop error: {}", .{err});
 
                 if (self.options.recovery.enabled) {
                     self.attemptRecovery();
-                    if (self.is_open) continue;
+                    if (self.is_open.load(.acquire)) continue;
                 }
                 break;
             };
 
+            self.last_frame_at.store(@intCast(Io.Clock.awake.now(getIo()).nanoseconds), .release);
             self.dispatchFrame(frame);
         }
 
-        self.is_open = false;
+        self.is_open.store(false, .release);
     }
 
     fn attemptRecovery(self: *Connection) void {
         const config = self.options.recovery;
-        self.is_open = false;
+        self.is_open.store(false, .release);
         self.event_listeners.emit(.{ .recovery_started = {} });
 
         // Stop heartbeat thread
@@ -512,7 +523,8 @@ pub const Connection = struct {
 
             self.recoverChannelsAndTopology();
 
-            self.is_open = true;
+            self.is_open.store(true, .release);
+            self.last_frame_at.store(@intCast(Io.Clock.awake.now(getIo()).nanoseconds), .release);
             self.event_listeners.emit(.{ .recovery_succeeded = {} });
 
             if (self.negotiated_heartbeat > 0) {
@@ -555,7 +567,7 @@ pub const Connection = struct {
 
             self.channel_mutex.lockUncancelable(getIo());
             if (self.channels.get(recorded_ch.id)) |ch| {
-                ch.is_open = true;
+                ch.is_open.store(true, .release);
                 ch.rpc_mutex.lockUncancelable(getIo());
                 ch.rpc_response = null;
                 ch.rpc_mutex.unlock(getIo());
@@ -576,6 +588,7 @@ pub const Connection = struct {
                         .durable = ex.durable,
                         .auto_delete = ex.auto_delete,
                         .internal = ex.internal,
+                        .arguments = ex.arguments,
                     } }) catch {};
                     _ = self.transport.readFrame(self.allocator) catch {};
                 },
@@ -588,6 +601,7 @@ pub const Connection = struct {
                         .durable = q.durable,
                         .exclusive = false,
                         .auto_delete = q.auto_delete,
+                        .arguments = q.arguments,
                     } }) catch {};
 
                     // Read queue.declare-ok to handle server-named queue renames
@@ -601,7 +615,9 @@ pub const Connection = struct {
                                             .old_name = q.name,
                                             .new_name = ok.queue,
                                         } });
-                                        self.topology.updateQueueName(self.allocator, q.name, ok.queue);
+                                        self.topology.updateQueueName(self.allocator, q.name, ok.queue) catch |err| {
+                                            log.err("failed to update queue name mapping: {}", .{err});
+                                        };
                                         self.topology.entries.items[i].queue.name = ok.queue;
                                     }
                                 },
@@ -617,6 +633,7 @@ pub const Connection = struct {
                         .queue = dest,
                         .exchange = b.source,
                         .routing_key = b.routing_key,
+                        .arguments = b.arguments,
                     } }) catch {};
                     _ = self.transport.readFrame(self.allocator) catch {};
                 },
@@ -625,6 +642,7 @@ pub const Connection = struct {
                         .destination = b.destination,
                         .source = b.source,
                         .routing_key = b.routing_key,
+                        .arguments = b.arguments,
                     } }) catch {};
                     _ = self.transport.readFrame(self.allocator) catch {};
                 },
@@ -640,6 +658,11 @@ pub const Connection = struct {
                 },
             }
         }
+    }
+
+    /// Whether the connection is open.
+    pub fn isOpen(self: *Connection) bool {
+        return self.is_open.load(.acquire);
     }
 
     /// Whether the connection is currently blocked by the server.
@@ -691,7 +714,7 @@ pub const Connection = struct {
 
                 if (self.on_close) |cb| cb(cc.reply_code, cc.reply_text);
                 self.event_listeners.emit(.{ .closed = .{ .code = cc.reply_code, .text = cc.reply_text } });
-                self.is_open = false;
+                self.is_open.store(false, .release);
             },
             .connection_close_ok, .connection_update_secret_ok => {
                 self.rpc_mutex.lockUncancelable(getIo());
@@ -716,6 +739,7 @@ pub const Connection = struct {
     fn heartbeatLoop(self: *Connection) void {
         defer self.heartbeat_exit.set(getIo());
         const interval_ns: u64 = @as(u64, self.negotiated_heartbeat) * std.time.ns_per_s / 2;
+        const deadline_ns: u64 = @as(u64, self.negotiated_heartbeat) * std.time.ns_per_s * 2;
         const check_interval: u64 = 500 * std.time.ns_per_ms;
         while (!self.should_stop.load(.acquire)) {
             // Sleep in short intervals so we can exit quickly on shutdown
@@ -727,6 +751,19 @@ pub const Connection = struct {
             }
             if (self.should_stop.load(.acquire)) break;
 
+            // Check for missed heartbeats: no frame received within 2x the interval
+            const last = self.last_frame_at.load(.acquire);
+            if (last > 0) {
+                const now_ns: i64 = @intCast(Io.Clock.awake.now(getIo()).nanoseconds);
+                const since: u64 = @intCast(@max(0, now_ns - last));
+                if (since > deadline_ns) {
+                    log.err("missed heartbeats: no frame received for {d}ms, closing connection", .{since / std.time.ns_per_ms});
+                    self.is_open.store(false, .release);
+                    self.event_listeners.emit(.{ .closed = .{ .code = 0, .text = "missed heartbeats" } });
+                    break;
+                }
+            }
+
             self.write_mutex.lockUncancelable(getIo());
             self.transport.sendFrame(.{ .heartbeat = {} }) catch {
                 self.write_mutex.unlock(getIo());
@@ -736,13 +773,23 @@ pub const Connection = struct {
         }
     }
 
-    fn waitForRpc(self: *Connection, _: u64) !Method {
+    fn waitForRpc(self: *Connection, timeout_ns: u64) !Method {
         const io = getIo();
+        const start = Io.Timestamp.now(io, .boot);
+        const limit: i96 = @intCast(timeout_ns);
+
         self.rpc_mutex.lockUncancelable(io);
         defer self.rpc_mutex.unlock(io);
 
         while (self.rpc_response == null) {
-            self.rpc_signal.waitUncancelable(io, &self.rpc_mutex);
+            const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
+            if (elapsed >= limit) return error.Timeout;
+            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
+            const epoch = self.rpc_signal.epoch.load(.acquire);
+            self.rpc_mutex.unlock(io);
+            io.futexWaitTimeout(u32, &self.rpc_signal.epoch.raw, epoch, timeout) catch {};
+            self.rpc_mutex.lockUncancelable(io);
         }
         const response = self.rpc_response.?;
         self.rpc_response = null;
@@ -750,7 +797,7 @@ pub const Connection = struct {
     }
 
     fn shutdown(self: *Connection) void {
-        self.is_open = false;
+        self.is_open.store(false, .release);
         self.should_stop.store(true, .release);
 
         // Unblock the reader thread from its blocking read
@@ -775,7 +822,7 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
-        if (self.is_open) self.close();
+        if (self.is_open.load(.acquire)) self.close();
 
         // Clean up channels
         self.channel_mutex.lockUncancelable(getIo());
@@ -803,15 +850,7 @@ pub const Connection = struct {
             .reason = reason,
         } });
 
-        const io = getIo();
-        self.rpc_mutex.lockUncancelable(io);
-        defer self.rpc_mutex.unlock(io);
-
-        while (self.rpc_response == null) {
-            self.rpc_signal.waitUncancelable(io, &self.rpc_mutex);
-        }
-        const response = self.rpc_response.?;
-        self.rpc_response = null;
+        const response = try self.waitForRpc(15 * std.time.ns_per_s);
         switch (response) {
             .connection_update_secret_ok => {},
             .connection_close => |cc| {
@@ -858,10 +897,15 @@ pub const Connection = struct {
     }
 
     fn connectTransport(allocator: Allocator, options: ConnectionOptions, host: []const u8, port: u16) !Transport {
+        // Zig 0.16 Threaded IO does not support connect timeouts yet,
+        // so always use .none until the runtime adds support.
+        _ = options.connection_timeout_ms;
+        const timeout: Io.Timeout = .none;
+
         if (options.tls) |tls_opts| {
-            return Transport.connectTls(allocator, host, port, tls_opts);
+            return Transport.connectTls(allocator, host, port, tls_opts, timeout);
         }
-        return Transport.connect(allocator, host, port);
+        return Transport.connect(allocator, host, port, timeout);
     }
 
     /// Remove a channel from the connection's channel map.

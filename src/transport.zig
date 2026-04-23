@@ -58,17 +58,19 @@ pub const Transport = struct {
     read_end: usize = 0,
     allocator: std.mem.Allocator,
 
-    pub fn connect(allocator: std.mem.Allocator, host: []const u8, port: u16) !Transport {
+    pub fn connect(allocator: std.mem.Allocator, host: []const u8, port: u16, timeout: std.Io.Timeout) !Transport {
         const io = getIo();
         const address = try net.IpAddress.parse(host, port);
-        const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
+        const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream, .timeout = timeout });
         errdefer stream.close(io);
 
         posix.setsockopt(stream.socket.handle, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1))) catch {};
 
         const buf_size = 256 * 1024;
         const read_buf = try allocator.alloc(u8, buf_size);
+        errdefer allocator.free(read_buf);
         const write_buf = try allocator.alloc(u8, 64 * 1024);
+        errdefer allocator.free(write_buf);
 
         const io_read_buf = try allocator.alloc(u8, 64 * 1024);
 
@@ -83,10 +85,10 @@ pub const Transport = struct {
     }
 
     /// Connect with TLS using ianic/tls.zig (supports TLS 1.2 and 1.3).
-    pub fn connectTls(allocator: std.mem.Allocator, host: []const u8, port: u16, tls_opts: TlsOptions) !Transport {
+    pub fn connectTls(allocator: std.mem.Allocator, host: []const u8, port: u16, tls_opts: TlsOptions, timeout: std.Io.Timeout) !Transport {
         const io = getIo();
         const address = try net.IpAddress.parse(host, port);
-        const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
+        const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream, .timeout = timeout });
         errdefer stream.close(io);
 
         posix.setsockopt(stream.socket.handle, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1))) catch {};
@@ -227,18 +229,20 @@ pub const Transport = struct {
         } });
         try self.writeNoFlush(header_encoded);
 
-        const max_body_per_frame = frame_max - constants.frame_overhead;
-        var offset: usize = 0;
-        while (offset < body.len or (offset == 0 and body.len == 0)) {
-            const end = @min(offset + max_body_per_frame, body.len);
-            var body_buf: [constants.default_frame_max + constants.frame_overhead]u8 = undefined;
-            const body_encoded = frame_mod.encodeFrame(&body_buf, .{ .body = .{
-                .channel = channel_id,
-                .payload = body[offset..end],
-            } });
-            try self.writeNoFlush(body_encoded);
-            offset = end;
-            if (body.len == 0) break;
+        // AMQP 0-9-1: no body frames when body_size is 0
+        if (body.len > 0) {
+            const max_body_per_frame = frame_max - constants.frame_overhead;
+            var offset: usize = 0;
+            while (offset < body.len) {
+                const end = @min(offset + max_body_per_frame, body.len);
+                var body_buf: [constants.default_frame_max + constants.frame_overhead]u8 = undefined;
+                const body_encoded = frame_mod.encodeFrame(&body_buf, .{ .body = .{
+                    .channel = channel_id,
+                    .payload = body[offset..end],
+                } });
+                try self.writeNoFlush(body_encoded);
+                offset = end;
+            }
         }
         try self.flush();
     }
@@ -255,7 +259,7 @@ pub const Transport = struct {
     ) !void {
         // Estimate total size: method frame + header frame + body frames
         const max_body_per_frame = frame_max - constants.frame_overhead;
-        const body_frame_count = if (body.len == 0) 1 else (body.len + max_body_per_frame - 1) / max_body_per_frame;
+        const body_frame_count = if (body.len == 0) 0 else (body.len + max_body_per_frame - 1) / max_body_per_frame;
         const estimated_size = 512 + // method frame (publish is small)
             256 + // header frame (properties)
             body.len + (body_frame_count * constants.frame_overhead);
@@ -294,17 +298,18 @@ pub const Transport = struct {
         } });
         offset += header_encoded.len;
 
-        // Encode body frames
-        var body_offset: usize = 0;
-        while (body_offset < body.len or (body_offset == 0 and body.len == 0)) {
-            const end = @min(body_offset + max_body_per_frame, body.len);
-            const body_encoded = frame_mod.encodeFrame(write_buf[offset..], .{ .body = .{
-                .channel = channel_id,
-                .payload = body[body_offset..end],
-            } });
-            offset += body_encoded.len;
-            body_offset = end;
-            if (body.len == 0) break;
+        // AMQP 0-9-1: no body frames when body_size is 0
+        if (body.len > 0) {
+            var body_offset: usize = 0;
+            while (body_offset < body.len) {
+                const end = @min(body_offset + max_body_per_frame, body.len);
+                const body_encoded = frame_mod.encodeFrame(write_buf[offset..], .{ .body = .{
+                    .channel = channel_id,
+                    .payload = body[body_offset..end],
+                } });
+                offset += body_encoded.len;
+                body_offset = end;
+            }
         }
 
         try self.writeNoFlush(write_buf[0..offset]);

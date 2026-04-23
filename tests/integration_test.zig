@@ -41,7 +41,7 @@ fn openTestConnection() !*bunny.Connection {
 test "connect with default configuration" {
     const conn = try openTestConnection();
     defer conn.deinit();
-    try testing.expect(conn.is_open);
+    try testing.expect(conn.isOpen());
     try testing.expect(conn.negotiated_frame_max > 0);
     try testing.expect(conn.negotiated_channel_max > 0);
     try testing.expect(!conn.isBlocked());
@@ -66,13 +66,13 @@ test "connect via TLS" {
         .recovery = .{ .enabled = false },
     });
     defer conn.deinit();
-    try testing.expect(conn.is_open);
+    try testing.expect(conn.isOpen());
 }
 
 test "connect and close gracefully" {
     const conn = try openTestConnection();
     conn.close();
-    try testing.expect(!conn.is_open);
+    try testing.expect(!conn.isOpen());
     conn.deinit();
 }
 
@@ -85,9 +85,9 @@ test "open and close a channel" {
     defer conn.deinit();
 
     const ch = try conn.openChannel();
-    try testing.expect(ch.is_open);
+    try testing.expect(ch.isOpen());
     try ch.closeChannel();
-    try testing.expect(!ch.is_open);
+    try testing.expect(!ch.isOpen());
 }
 
 test "open multiple channels" {
@@ -116,7 +116,7 @@ test "declare and delete a queue" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    const info = try ch.queueDeclare("bunny-zig.test.declare-delete", .{ .auto_delete = true });
+    const info = try ch.queueDeclare("bunny-zig.test.declare-delete", .{ .exclusive = true, .auto_delete = true });
     try testing.expectEqualSlices(u8, "bunny-zig.test.declare-delete", info.name);
 
     _ = try ch.queueDelete("bunny-zig.test.declare-delete");
@@ -150,7 +150,7 @@ test "queue purge" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    _ = try ch.queueDeclare("bunny-zig.test.purge", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.purge", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
 
     for (0..5) |_| {
@@ -220,7 +220,7 @@ test "bind and unbind a queue" {
     defer ch.closeChannel() catch {};
 
     try ch.declareDirect("bunny-zig.test.bind-exchange");
-    _ = try ch.queueDeclare("bunny-zig.test.bind-queue", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.bind-queue", .{ .exclusive = true, .auto_delete = true });
 
     try ch.queueBind("bunny-zig.test.bind-queue", "bunny-zig.test.bind-exchange", "test.key");
     try ch.queueUnbind("bunny-zig.test.bind-queue", "bunny-zig.test.bind-exchange", "test.key");
@@ -255,7 +255,7 @@ test "publish and basic.get" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    _ = try ch.queueDeclare("bunny-zig.test.basic-get", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.basic-get", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
 
     try ch.publishToQueue("bunny-zig.test.basic-get", "Hello from bunny-zig!", BasicProperties.persistent);
@@ -276,7 +276,7 @@ test "publish and consume with manual ack" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    _ = try ch.queueDeclare("bunny-zig.test.consume", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.consume", .{ .exclusive = true, .auto_delete = true });
     _ = try ch.basicConsume("bunny-zig.test.consume", "test-consumer", .manual);
 
     try ch.publishToQueue("bunny-zig.test.consume", "consumed message", .{});
@@ -296,7 +296,7 @@ test "publish with properties" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    _ = try ch.queueDeclare("bunny-zig.test.props", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.props", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
 
     const props = BasicProperties.default
@@ -316,7 +316,7 @@ test "publish with properties" {
     try testing.expect(result != null);
     const msg = result.?;
     try testing.expectEqualSlices(u8, "application/json", msg.properties.content_type.?);
-    try testing.expectEqual(\1, msg.properties.delivery_mode.?);
+    try testing.expectEqual(2, msg.properties.delivery_mode.?);
     try testing.expectEqualSlices(u8, "msg-001", msg.properties.message_id.?);
 
     try ch.basicAck(msg.delivery_tag, false);
@@ -350,7 +350,7 @@ test "publisher confirms: batch waitForConfirms" {
     try testing.expect(ch.confirm_mode);
     try testing.expect(!ch.confirm_tracking);
 
-    _ = try ch.queueDeclare("bunny-zig.test.confirms-batch", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.confirms-batch", .{ .exclusive = true, .auto_delete = true });
 
     for (0..10) |i| {
         var buf: [64]u8 = undefined;
@@ -373,7 +373,7 @@ test "publisher confirms: per-message tracking" {
     try ch.confirmSelectWithOptions(.{ .tracking = true });
     try testing.expect(ch.confirm_tracking);
 
-    _ = try ch.queueDeclare("bunny-zig.test.confirms-tracking", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.confirms-tracking", .{ .exclusive = true, .auto_delete = true });
 
     // Each publish blocks until the broker confirms
     for (0..10) |i| {
@@ -383,7 +383,7 @@ test "publisher confirms: per-message tracking" {
     }
 
     // All confirms already received because tracking mode waits per message
-    try testing.expectEqual(\1, ch.last_confirmed_seq);
+    try testing.expectEqual(10, ch.last_confirmed_seq);
 
     _ = try ch.queueDelete("bunny-zig.test.confirms-tracking");
 }
@@ -396,9 +396,9 @@ test "publisher confirms: per-message tracking with backpressure" {
 
     try ch.confirmSelectWithOptions(.{ .tracking = true, .outstanding_limit = 5 });
     try testing.expect(ch.confirm_tracking);
-    try testing.expectEqual(\1, ch.outstanding_limit);
+    try testing.expectEqual(5, ch.outstanding_limit);
 
-    _ = try ch.queueDeclare("bunny-zig.test.confirms-backpressure", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.confirms-backpressure", .{ .exclusive = true, .auto_delete = true });
 
     for (0..20) |i| {
         var buf: [64]u8 = undefined;
@@ -406,7 +406,7 @@ test "publisher confirms: per-message tracking with backpressure" {
         try ch.publishToQueue("bunny-zig.test.confirms-backpressure", msg, .{});
     }
 
-    try testing.expectEqual(\1, ch.last_confirmed_seq);
+    try testing.expectEqual(20, ch.last_confirmed_seq);
 
     _ = try ch.queueDelete("bunny-zig.test.confirms-backpressure");
 }
@@ -421,7 +421,7 @@ test "reject and requeue" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    _ = try ch.queueDeclare("bunny-zig.test.reject", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.reject", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
 
     // Use a consumer for reliable delivery
@@ -449,7 +449,7 @@ test "nack with requeue" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    _ = try ch.queueDeclare("bunny-zig.test.nack", .{ .auto_delete = true });
+    _ = try ch.queueDeclare("bunny-zig.test.nack", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
 
     _ = try ch.basicConsume("bunny-zig.test.nack", "", .manual);
@@ -515,7 +515,7 @@ test "recovery: reconnects after forced close" {
     });
     defer conn.deinit();
 
-    try testing.expect(conn.is_open);
+    try testing.expect(conn.isOpen());
 
     // Allow stats to be emitted
     sleepMs(1200);
@@ -527,14 +527,14 @@ test "recovery: reconnects after forced close" {
 
     // Wait for the client to detect the closure and recover
     for (0..40) |_| {
-        if (!conn.is_open) break;
+        if (!conn.isOpen()) break;
         sleepMs(250);
     }
     for (0..40) |_| {
-        if (conn.is_open) break;
+        if (conn.isOpen()) break;
         sleepMs(250);
     }
-    try testing.expect(conn.is_open);
+    try testing.expect(conn.isOpen());
 }
 
 test "recovery: topology is replayed after reconnect" {
@@ -568,14 +568,14 @@ test "recovery: topology is replayed after reconnect" {
 
     // Wait for closure and recovery
     for (0..40) |_| {
-        if (!conn.is_open) break;
+        if (!conn.isOpen()) break;
         sleepMs(250);
     }
     for (0..40) |_| {
-        if (conn.is_open) break;
+        if (conn.isOpen()) break;
         sleepMs(250);
     }
-    try testing.expect(conn.is_open);
+    try testing.expect(conn.isOpen());
 
     // Verify topology was replayed: publish to the exchange, consume from the queue
     try ch.confirmSelect();
@@ -595,3 +595,172 @@ test "recovery: topology is replayed after reconnect" {
     _ = try ch.queueDelete("bunny-zig.test.recovery-q");
     try ch.exchangeDelete("bunny-zig.test.recovery-ex");
 }
+
+//
+// Transaction tests
+//
+
+test "tx: commit publishes messages" {
+    const conn = try openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    _ = try ch.queueDeclare("bunny-zig.test.tx-commit", .{ .exclusive = true, .auto_delete = true });
+
+    try ch.txSelect();
+    try ch.publishToQueue("bunny-zig.test.tx-commit", "tx message 1", .{});
+    try ch.publishToQueue("bunny-zig.test.tx-commit", "tx message 2", .{});
+    try ch.txCommit();
+
+    const msg1 = try pollBasicGet(ch, "bunny-zig.test.tx-commit");
+    try testing.expect(msg1 != null);
+    try ch.basicAck(msg1.?.delivery_tag, false);
+
+    const msg2 = try pollBasicGet(ch, "bunny-zig.test.tx-commit");
+    try testing.expect(msg2 != null);
+    try ch.basicAck(msg2.?.delivery_tag, false);
+
+    _ = try ch.queueDelete("bunny-zig.test.tx-commit");
+}
+
+test "tx: rollback discards messages" {
+    const conn = try openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    _ = try ch.queueDeclare("bunny-zig.test.tx-rollback", .{ .exclusive = true, .auto_delete = true });
+
+    try ch.txSelect();
+    try ch.publishToQueue("bunny-zig.test.tx-rollback", "will be discarded", .{});
+    try ch.txRollback();
+
+    const msg = try ch.basicGet("bunny-zig.test.tx-rollback", .manual);
+    try testing.expect(msg == null);
+
+    _ = try ch.queueDelete("bunny-zig.test.tx-rollback");
+}
+
+//
+// Quorum queue tests
+//
+
+test "declare and use a quorum queue" {
+    const conn = try openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const qi = try ch.quorumQueue("bunny-zig.test.quorum");
+    try testing.expect(qi.message_count == 0);
+
+    try ch.confirmSelect();
+    try ch.publishToQueue("bunny-zig.test.quorum", "quorum message", .{});
+    try testing.expect(try ch.waitForConfirms());
+
+    const msg = try pollBasicGet(ch, "bunny-zig.test.quorum");
+    try testing.expect(msg != null);
+    try testing.expectEqualSlices(u8, "quorum message", msg.?.body);
+    try ch.basicAck(msg.?.delivery_tag, false);
+
+    _ = try ch.queueDelete("bunny-zig.test.quorum");
+}
+
+//
+// Edge case tests
+//
+
+test "publish and consume empty body" {
+    const conn = try openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    _ = try ch.queueDeclare("bunny-zig.test.empty-body", .{ .exclusive = true, .auto_delete = true });
+    try ch.confirmSelect();
+
+    try ch.publishToQueue("bunny-zig.test.empty-body", "", .{});
+    try testing.expect(try ch.waitForConfirms());
+
+    const msg = try pollBasicGet(ch, "bunny-zig.test.empty-body");
+    try testing.expect(msg != null);
+    try testing.expectEqual(0, msg.?.body.len);
+
+    try ch.basicAck(msg.?.delivery_tag, false);
+    _ = try ch.queueDelete("bunny-zig.test.empty-body");
+}
+
+test "publish and consume large message spanning multiple frames" {
+    const conn = try openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    _ = try ch.queueDeclare("bunny-zig.test.large-msg", .{ .exclusive = true, .auto_delete = true });
+    try ch.confirmSelect();
+
+    // Build a message larger than the negotiated frame_max (typically 131072).
+    // This forces multi-frame body encoding.
+    const body_size = conn.negotiated_frame_max * 2;
+    const body = try std.heap.page_allocator.alloc(u8, body_size);
+    defer std.heap.page_allocator.free(body);
+    @memset(body, 'A');
+
+    try ch.publishToQueue("bunny-zig.test.large-msg", body, .{});
+    try testing.expect(try ch.waitForConfirms());
+
+    _ = try ch.basicConsume("bunny-zig.test.large-msg", "", .manual);
+    const delivery = try ch.recvDelivery();
+    try testing.expect(delivery != null);
+    try testing.expectEqual(body_size, delivery.?.body.len);
+    // Verify first and last bytes survived the multi-frame roundtrip
+    try testing.expectEqual('A', delivery.?.body[0]);
+    try testing.expectEqual('A', delivery.?.body[body_size - 1]);
+
+    try ch.basicAck(delivery.?.delivery_tag, false);
+    _ = try ch.queueDelete("bunny-zig.test.large-msg");
+}
+
+test "two consumers on the same queue" {
+    const conn = try openTestConnection();
+    defer conn.deinit();
+
+    const ch1 = try conn.openChannel();
+    defer ch1.closeChannel() catch {};
+    const ch2 = try conn.openChannel();
+    defer ch2.closeChannel() catch {};
+
+    _ = try ch1.queueDeclare("bunny-zig.test.two-consumers", .{ .exclusive = true, .auto_delete = true });
+
+    _ = try ch1.basicConsume("bunny-zig.test.two-consumers", "c1", .manual);
+    _ = try ch2.basicConsume("bunny-zig.test.two-consumers", "c2", .manual);
+
+    try ch1.confirmSelect();
+    for (0..4) |i| {
+        var buf: [32]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "msg-{d}", .{i}) catch "msg";
+        try ch1.publishToQueue("bunny-zig.test.two-consumers", msg, .{});
+    }
+    try testing.expect(try ch1.waitForConfirms());
+
+    // Both consumers should receive messages (round-robin).
+    // Poll non-blocking to avoid deadlocking if distribution is uneven.
+    var count: u32 = 0;
+    for (0..200) |_| {
+        if (count >= 4) break;
+        if (ch1.tryRecvDelivery()) |d| {
+            try ch1.basicAck(d.delivery_tag, false);
+            count += 1;
+        }
+        if (ch2.tryRecvDelivery()) |d| {
+            try ch2.basicAck(d.delivery_tag, false);
+            count += 1;
+        }
+        if (count < 4) sleepMs(25);
+    }
+    try testing.expectEqual(4, count);
+
+    _ = try ch1.queueDelete("bunny-zig.test.two-consumers");
+}
+

@@ -21,7 +21,7 @@ const WorkItem = struct {
 
 pub const ConsumerWorkPool = struct {
     workers: []Thread,
-    queue: std.ArrayList(WorkItem),
+    queue: std.Deque(WorkItem),
     mutex: Mutex = .init,
     signal: Condition = .init,
     should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -61,7 +61,7 @@ pub const ConsumerWorkPool = struct {
     pub fn submit(self: *ConsumerWorkPool, handler: *const fn (Delivery) void, delivery: Delivery) void {
         const io = getIo();
         self.mutex.lockUncancelable(io);
-        self.queue.append(self.allocator, .{ .handler = handler, .delivery = delivery }) catch {
+        self.queue.pushBack(self.allocator, .{ .handler = handler, .delivery = delivery }) catch {
             self.mutex.unlock(io);
             return;
         };
@@ -88,14 +88,13 @@ pub const ConsumerWorkPool = struct {
         const io = getIo();
         while (true) {
             pool.mutex.lockUncancelable(io);
-            while (pool.queue.items.len == 0 and !pool.should_stop.load(.acquire)) {
+            while (pool.queue.len == 0 and !pool.should_stop.load(.acquire)) {
                 pool.signal.waitUncancelable(io, &pool.mutex);
             }
-            if (pool.queue.items.len == 0) {
+            const item = pool.queue.popFront() orelse {
                 pool.mutex.unlock(io);
                 return;
-            }
-            const item = pool.queue.orderedRemove(0);
+            };
             pool.mutex.unlock(io);
 
             item.handler(item.delivery);
