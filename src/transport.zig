@@ -17,6 +17,17 @@ fn getIo() Io {
     return Io.Threaded.global_single_threaded.io();
 }
 
+/// Connect to a host by IP literal or hostname.
+fn connectToHost(io: Io, host: []const u8, port: u16, timeout: Io.Timeout) !net.Stream {
+    // Try as an IP literal first, fall back to DNS resolution for hostnames
+    if (net.IpAddress.parse(host, port)) |address| {
+        return net.IpAddress.connect(&address, io, .{ .mode = .stream, .timeout = timeout });
+    } else |_| {
+        const hostname = try net.HostName.init(host);
+        return hostname.connect(io, port, .{ .mode = .stream, .timeout = timeout });
+    }
+}
+
 pub const TransportError = error{
     ConnectionRefused,
     ConnectionReset,
@@ -60,8 +71,7 @@ pub const Transport = struct {
 
     pub fn connect(allocator: std.mem.Allocator, host: []const u8, port: u16, timeout: std.Io.Timeout) !Transport {
         const io = getIo();
-        const address = try net.IpAddress.parse(host, port);
-        const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream, .timeout = timeout });
+        const stream = try connectToHost(io, host, port, timeout);
         errdefer stream.close(io);
 
         posix.setsockopt(stream.socket.handle, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1))) catch {};
@@ -87,8 +97,7 @@ pub const Transport = struct {
     /// Connect with TLS using ianic/tls.zig (supports TLS 1.2 and 1.3).
     pub fn connectTls(allocator: std.mem.Allocator, host: []const u8, port: u16, tls_opts: TlsOptions, timeout: std.Io.Timeout) !Transport {
         const io = getIo();
-        const address = try net.IpAddress.parse(host, port);
-        const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream, .timeout = timeout });
+        const stream = try connectToHost(io, host, port, timeout);
         errdefer stream.close(io);
 
         posix.setsockopt(stream.socket.handle, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1))) catch {};
@@ -155,11 +164,10 @@ pub const Transport = struct {
     }
 
     pub fn close(self: *Transport) void {
-        const io = getIo();
         if (self.tls_conn) |*tc| {
             tc.close() catch {};
         }
-        self.stream.close(io);
+        self.stream.close(getIo());
         self.allocator.free(self.read_buf);
         if (self.write_buf.len > 0) self.allocator.free(self.write_buf);
         if (self.stream_reader) |r| self.allocator.free(r.interface.buffer);
@@ -316,6 +324,120 @@ pub const Transport = struct {
         if (do_flush) try self.flush();
     }
 
+    /// Send a batch of publishes with the same method and properties.
+    /// Encodes the method+header template once, patches body_size per message,
+    /// and accumulates messages into a staging buffer to minimize writeNoFlush calls.
+    pub fn sendPublishBatch(
+        self: *Transport,
+        channel_id: u16,
+        method: protocol.method.Method,
+        props: protocol.properties.BasicProperties,
+        bodies: []const []const u8,
+        frame_max: u32,
+        do_flush: bool,
+    ) !void {
+        if (bodies.len == 0) return;
+
+        const max_body_per_frame = frame_max - constants.frame_overhead;
+
+        // Encode method + header as a contiguous template (~50 bytes).
+        var template_store: [512]u8 = undefined;
+        const method_bytes = frame_mod.encodeFrame(&template_store, .{ .method = .{
+            .channel = channel_id,
+            .method = method,
+        } });
+        const method_len = method_bytes.len;
+
+        const header_bytes = frame_mod.encodeFrame(template_store[method_len..], .{ .header = .{
+            .channel = channel_id,
+            .class_id = constants.class_basic,
+            .body_size = 0,
+            .properties = props,
+        } });
+        const header_len = header_bytes.len;
+        const template_len = method_len + header_len;
+
+        // body_size offset: method_len + type(1) + channel(2) + size(4) + class(2) + weight(2)
+        const body_size_offset = method_len + 11;
+
+        // Staging buffer: accumulate multiple messages before writing.
+        // Sized to match the transport write buffer so each writeNoFlush
+        // fills it in one pass.
+        var staging: [64 * 1024]u8 = undefined;
+        var cursor: usize = 0;
+
+        for (bodies) |body| {
+            std.mem.writeInt(u64, template_store[body_size_offset..][0..8], @intCast(body.len), .big);
+
+            if (body.len == 0) {
+                // Empty body: method + header only, no body frame
+                if (cursor + template_len > staging.len) {
+                    try self.writeNoFlush(staging[0..cursor]);
+                    cursor = 0;
+                }
+                @memcpy(staging[cursor..][0..template_len], template_store[0..template_len]);
+                cursor += template_len;
+            } else if (body.len <= max_body_per_frame) {
+                // Common case: single body frame
+                const msg_len = template_len + constants.frame_overhead + body.len;
+                if (msg_len > staging.len) {
+                    // Message too large for staging, flush and write directly
+                    if (cursor > 0) {
+                        try self.writeNoFlush(staging[0..cursor]);
+                        cursor = 0;
+                    }
+                    try self.writeNoFlush(template_store[0..template_len]);
+                    var body_frame_buf: [constants.default_frame_max + constants.frame_overhead]u8 = undefined;
+                    const encoded = frame_mod.encodeFrame(&body_frame_buf, .{ .body = .{
+                        .channel = channel_id,
+                        .payload = body,
+                    } });
+                    try self.writeNoFlush(encoded);
+                } else {
+                    if (cursor + msg_len > staging.len) {
+                        try self.writeNoFlush(staging[0..cursor]);
+                        cursor = 0;
+                    }
+                    // Copy template (method + header)
+                    @memcpy(staging[cursor..][0..template_len], template_store[0..template_len]);
+                    cursor += template_len;
+                    // Inline body frame: type(1) + channel(2) + size(4) + payload + end(1)
+                    staging[cursor] = constants.frame_body;
+                    cursor += 1;
+                    std.mem.writeInt(u16, staging[cursor..][0..2], channel_id, .big);
+                    cursor += 2;
+                    std.mem.writeInt(u32, staging[cursor..][0..4], @intCast(body.len), .big);
+                    cursor += 4;
+                    @memcpy(staging[cursor..][0..body.len], body);
+                    cursor += body.len;
+                    staging[cursor] = constants.frame_end;
+                    cursor += 1;
+                }
+            } else {
+                // Large body spanning multiple frames
+                if (cursor > 0) {
+                    try self.writeNoFlush(staging[0..cursor]);
+                    cursor = 0;
+                }
+                try self.writeNoFlush(template_store[0..template_len]);
+                var body_off: usize = 0;
+                while (body_off < body.len) {
+                    const end = @min(body_off + max_body_per_frame, body.len);
+                    var body_frame_buf: [constants.default_frame_max + constants.frame_overhead]u8 = undefined;
+                    const encoded = frame_mod.encodeFrame(&body_frame_buf, .{ .body = .{
+                        .channel = channel_id,
+                        .payload = body[body_off..end],
+                    } });
+                    try self.writeNoFlush(encoded);
+                    body_off = end;
+                }
+            }
+        }
+
+        if (cursor > 0) try self.writeNoFlush(staging[0..cursor]);
+        if (do_flush) try self.flush();
+    }
+
     /// Read the next complete frame from the connection.
     pub fn readFrame(self: *Transport, allocator: std.mem.Allocator) !frame_mod.Frame {
         while (true) {
@@ -386,9 +508,10 @@ pub const Transport = struct {
         }
     }
 
-    /// Shutdown the underlying socket to unblock any threads in read/write.
-    pub fn shutdown(self: *Transport) void {
-        const io = getIo();
-        self.stream.shutdown(io, .both) catch {};
+    /// Shut down the socket for both reading and writing.
+    /// This unblocks any threads in blocking readv/writev (they see EOF)
+    /// without closing the fd, so Zig's IO layer won't panic on BADF.
+    pub fn shutdownSocket(self: *Transport) void {
+        self.stream.shutdown(getIo(), .both) catch {};
     }
 };

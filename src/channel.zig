@@ -5,6 +5,7 @@ const Thread = std.Thread;
 const Io = std.Io;
 const Mutex = Io.Mutex;
 const Condition = Io.Condition;
+const Notify = @import("notify.zig").Notify;
 
 /// Per-message publisher confirm future, modeled after Swift's CheckedContinuation
 /// and .NET's TaskCompletionSource.
@@ -177,7 +178,7 @@ pub const Channel = struct {
 
     // RPC synchronization: the reader thread posts responses here
     rpc_mutex: Mutex = .init,
-    rpc_signal: Condition = .init,
+    rpc_signal: Notify = .init,
     rpc_response: ?Method = null,
 
     // Content assembly state (for multi-frame messages)
@@ -217,7 +218,7 @@ pub const Channel = struct {
     outstanding_count: u32 = 0,
     next_publish_seq_no: u64 = 0,
     confirm_mutex: Mutex = .init,
-    confirm_signal: Condition = .init,
+    confirm_signal: Notify = .init,
     last_confirmed_seq: u64 = 0,
     confirm_promises: std.AutoHashMap(u64, *ConfirmPromise) = undefined,
     promise_pool: std.ArrayList(*ConfirmPromise) = .empty,
@@ -670,6 +671,45 @@ pub const Channel = struct {
         });
     }
 
+    /// Publish a batch of messages to the same exchange and routing key.
+    /// Use opts.flush to control whether to flush after the batch.
+    pub fn publishBatch(
+        self: *Channel,
+        bodies: []const []const u8,
+        opts: PublishOptions,
+    ) !void {
+        if (bodies.len == 0) return;
+
+        if (self.confirm_mode) {
+            const io = getIo();
+            self.confirm_mutex.lockUncancelable(io);
+
+            if (self.confirm_tracking and self.outstanding_limit > 0) {
+                while (self.outstanding_count >= self.outstanding_limit) {
+                    if (!self.is_open.load(.acquire)) {
+                        self.confirm_mutex.unlock(io);
+                        return error.ChannelClosed;
+                    }
+                    self.confirm_signal.waitUncancelable(io, &self.confirm_mutex);
+                }
+            }
+
+            self.next_publish_seq_no += @intCast(bodies.len);
+            if (self.confirm_tracking) {
+                self.outstanding_count += @intCast(bodies.len);
+            }
+            self.confirm_mutex.unlock(io);
+        }
+
+        const method = protocol.method.Method{ .basic_publish = .{
+            .exchange = opts.exchange,
+            .routing_key = opts.routing_key,
+            .mandatory = opts.mandatory,
+        } };
+
+        try self.connection.sendPublishBatch(self.id, method, opts.properties, bodies, opts.flush == .flush_immediately);
+    }
+
     /// Flush the connection's write buffer to the socket.
     /// Only needed when using FlushStrategy.buffered.
     pub fn flushTransport(self: *Channel) !void {
@@ -917,7 +957,7 @@ pub const Channel = struct {
     /// Wait until all published messages have been confirmed.
     /// Only useful when tracking is false; with tracking, each publish already waits.
     pub fn waitForConfirms(self: *Channel) !bool {
-        return self.waitForConfirmsTimeout(std.time.ns_per_s * 30);
+        return self.waitForConfirmsTimeout(self.connection.continuationTimeoutNs());
     }
 
     /// Wait for confirms with a timeout (in nanoseconds).
@@ -934,11 +974,11 @@ pub const Channel = struct {
             if (!self.is_open.load(.acquire)) return error.ChannelClosed;
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
-            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
-            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
-            const epoch = self.confirm_signal.epoch.load(.acquire);
+            const remaining = limit - elapsed;
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = remaining }, .clock = .awake } };
+            const expected = self.confirm_signal.snapshot();
             self.confirm_mutex.unlock(io);
-            io.futexWaitTimeout(u32, &self.confirm_signal.epoch.raw, epoch, timeout) catch {};
+            self.confirm_signal.waitTimeout(io, expected, timeout);
             self.confirm_mutex.lockUncancelable(io);
         }
 
@@ -1239,7 +1279,7 @@ pub const Channel = struct {
 
     /// Wait for the next RPC response (used by synchronous operations).
     pub fn awaitMethod(self: *Channel) !Method {
-        return self.awaitMethodTimeout(15 * std.time.ns_per_s);
+        return self.awaitMethodTimeout(self.connection.continuationTimeoutNs());
     }
 
     fn awaitMethodTimeout(self: *Channel, timeout_ns: u64) !Method {
@@ -1254,13 +1294,11 @@ pub const Channel = struct {
             if (!self.is_open.load(.acquire)) return error.ChannelClosed;
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
-            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
-            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
-            // Snapshot the epoch, release the mutex, and do a timed futex
-            // wait. This replicates Condition.wait with a timeout bound.
-            const epoch = self.rpc_signal.epoch.load(.acquire);
+            const remaining = limit - elapsed;
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = remaining }, .clock = .awake } };
+            const expected = self.rpc_signal.snapshot();
             self.rpc_mutex.unlock(io);
-            io.futexWaitTimeout(u32, &self.rpc_signal.epoch.raw, epoch, timeout) catch {};
+            self.rpc_signal.waitTimeout(io, expected, timeout);
             self.rpc_mutex.lockUncancelable(io);
         }
         const response = self.rpc_response.?;
@@ -1276,7 +1314,7 @@ pub const Channel = struct {
     /// Wait for content frames (header + body) to be assembled for basic.get-ok.
     fn awaitContent(self: *Channel) !ContentResult {
         const io = getIo();
-        const timeout_ns: u64 = 30 * std.time.ns_per_s;
+        const timeout_ns = self.connection.continuationTimeoutNs();
         const start = Io.Timestamp.now(io, .boot);
         const limit: i96 = @intCast(timeout_ns);
 
@@ -1287,11 +1325,11 @@ pub const Channel = struct {
             if (!self.is_open.load(.acquire)) return error.ChannelClosed;
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
-            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
-            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
-            const epoch = self.rpc_signal.epoch.load(.acquire);
+            const remaining = limit - elapsed;
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = remaining }, .clock = .awake } };
+            const expected = self.rpc_signal.snapshot();
             self.rpc_mutex.unlock(io);
-            io.futexWaitTimeout(u32, &self.rpc_signal.epoch.raw, epoch, timeout) catch {};
+            self.rpc_signal.waitTimeout(io, expected, timeout);
             self.rpc_mutex.lockUncancelable(io);
         }
 

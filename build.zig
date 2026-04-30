@@ -50,4 +50,20 @@ pub fn build(b: *std.Build) void {
 
     const integration_test_step = b.step("integration-test", "Run integration tests (requires RabbitMQ)");
     integration_test_step.dependOn(&run_integration_tests.step);
+
+    const bench_exe = b.addExecutable(.{
+        .name = "publish-throughput",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/publish_throughput.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "bunny", .module = bunny_mod },
+            },
+        }),
+    });
+    const run_bench = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run publish throughput benchmark (requires RabbitMQ)");
+    bench_step.dependOn(&run_bench.step);
+
 }

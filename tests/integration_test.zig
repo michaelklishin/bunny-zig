@@ -34,11 +34,29 @@ fn openTestConnection() !*bunny.Connection {
     });
 }
 
+const TestTimer = struct {
+    name: []const u8,
+    start_ns: i64,
+
+    fn start(name: []const u8) TestTimer {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        return .{ .name = name, .start_ns = @intCast(std.Io.Clock.awake.now(io).nanoseconds) };
+    }
+
+    fn stop(self: TestTimer) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const now_ns: i64 = @intCast(std.Io.Clock.awake.now(io).nanoseconds);
+        const elapsed_ms = @as(u64, @intCast(@divTrunc(now_ns - self.start_ns, std.time.ns_per_ms)));
+        std.debug.print("[test_timing] {s}: {d}ms\n", .{ self.name, elapsed_ms });
+    }
+};
+
 //
 // Connection tests
 //
 
 test "connect with default configuration" {
+    const _t = TestTimer.start("connect with default configuration"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     try testing.expect(conn.isOpen());
@@ -49,6 +67,7 @@ test "connect with default configuration" {
 }
 
 test "connect via TLS" {
+    const _t = TestTimer.start("connect via TLS"); defer _t.stop();
     const certs_env = std.c.getenv("TLS_CERTS_DIR");
     if (certs_env == null) return error.SkipZigTest;
     const certs_dir: []const u8 = std.mem.sliceTo(certs_env.?, 0);
@@ -70,6 +89,7 @@ test "connect via TLS" {
 }
 
 test "connect and close gracefully" {
+    const _t = TestTimer.start("connect and close gracefully"); defer _t.stop();
     const conn = try openTestConnection();
     conn.close();
     try testing.expect(!conn.isOpen());
@@ -81,6 +101,7 @@ test "connect and close gracefully" {
 //
 
 test "open and close a channel" {
+    const _t = TestTimer.start("open and close a channel"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
 
@@ -91,6 +112,7 @@ test "open and close a channel" {
 }
 
 test "open multiple channels" {
+    const _t = TestTimer.start("open multiple channels"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
 
@@ -111,6 +133,7 @@ test "open multiple channels" {
 //
 
 test "declare and delete a queue" {
+    const _t = TestTimer.start("declare and delete a queue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -123,6 +146,7 @@ test "declare and delete a queue" {
 }
 
 test "declare a durable queue" {
+    const _t = TestTimer.start("declare a durable queue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -135,6 +159,7 @@ test "declare a durable queue" {
 }
 
 test "declare a temporary queue" {
+    const _t = TestTimer.start("declare a temporary queue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -145,6 +170,7 @@ test "declare a temporary queue" {
 }
 
 test "queue purge" {
+    const _t = TestTimer.start("queue purge"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -170,6 +196,7 @@ test "queue purge" {
 //
 
 test "declare and delete a fanout exchange" {
+    const _t = TestTimer.start("declare and delete a fanout exchange"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -180,6 +207,7 @@ test "declare and delete a fanout exchange" {
 }
 
 test "declare and delete a topic exchange" {
+    const _t = TestTimer.start("declare and delete a topic exchange"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -190,6 +218,7 @@ test "declare and delete a topic exchange" {
 }
 
 test "declare and delete a direct exchange" {
+    const _t = TestTimer.start("declare and delete a direct exchange"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -200,6 +229,7 @@ test "declare and delete a direct exchange" {
 }
 
 test "declare and delete a headers exchange" {
+    const _t = TestTimer.start("declare and delete a headers exchange"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -214,6 +244,7 @@ test "declare and delete a headers exchange" {
 //
 
 test "bind and unbind a queue" {
+    const _t = TestTimer.start("bind and unbind a queue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -230,6 +261,7 @@ test "bind and unbind a queue" {
 }
 
 test "exchange-to-exchange binding" {
+    const _t = TestTimer.start("exchange-to-exchange binding"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -250,6 +282,7 @@ test "exchange-to-exchange binding" {
 //
 
 test "publish and basic.get" {
+    const _t = TestTimer.start("publish and basic.get"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -271,6 +304,7 @@ test "publish and basic.get" {
 }
 
 test "publish and consume with manual ack" {
+    const _t = TestTimer.start("publish and consume with manual ack"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -291,6 +325,7 @@ test "publish and consume with manual ack" {
 }
 
 test "publish with properties" {
+    const _t = TestTimer.start("publish with properties"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -328,6 +363,7 @@ test "publish with properties" {
 //
 
 test "basic qos" {
+    const _t = TestTimer.start("basic qos"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -341,6 +377,7 @@ test "basic qos" {
 //
 
 test "publisher confirms: batch waitForConfirms" {
+    const _t = TestTimer.start("publisher confirms: batch waitForConfirms"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -365,6 +402,7 @@ test "publisher confirms: batch waitForConfirms" {
 }
 
 test "publisher confirms: per-message tracking" {
+    const _t = TestTimer.start("publisher confirms: per-message tracking"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -389,6 +427,7 @@ test "publisher confirms: per-message tracking" {
 }
 
 test "publisher confirms: per-message tracking with backpressure" {
+    const _t = TestTimer.start("publisher confirms: per-message tracking with backpressure"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -416,6 +455,7 @@ test "publisher confirms: per-message tracking with backpressure" {
 //
 
 test "reject and requeue" {
+    const _t = TestTimer.start("reject and requeue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -444,6 +484,7 @@ test "reject and requeue" {
 }
 
 test "nack with requeue" {
+    const _t = TestTimer.start("nack with requeue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -492,15 +533,23 @@ fn openHttpApiClient() !api.Client {
     return api.Client.init(std.heap.c_allocator, io, .{});
 }
 
-/// Force-close connections via the HTTP API. Closes all connections for "guest",
-/// then waits for the server to process the closure.
-fn forceCloseConnections(http_client: *api.Client) void {
+/// Force-close a specific connection via the HTTP API,
+/// identified by its client-provided connection name.
+fn forceCloseConnection(http_client: *api.Client, connection_name: []const u8) void {
     sleepMs(1200);
-    http_client.closeUserConnections("guest", "closed by bunny-zig tests", true) catch {};
+    const conns = (http_client.listConnections() catch return).value;
+    for (conns) |ci| {
+        const cp = ci.client_properties orelse continue;
+        const cn = cp.connection_name orelse continue;
+        if (std.mem.eql(u8, cn, connection_name)) {
+            http_client.closeConnection(ci.name, "closed by bunny-zig tests", true) catch {};
+        }
+    }
     sleepMs(500);
 }
 
 test "recovery: reconnects after forced close" {
+    const _t = TestTimer.start("recovery: reconnects after forced close"); defer _t.stop();
     const conn_name = "bunny-zig.test.recovery";
     const conn = try bunny.Connection.open(test_allocator, .{
         .host = testHost(),
@@ -523,7 +572,7 @@ test "recovery: reconnects after forced close" {
     var http_client = try openHttpApiClient();
     defer http_client.deinit();
 
-    forceCloseConnections(&http_client);
+    forceCloseConnection(&http_client, conn_name);
 
     // Wait for the client to detect the closure and recover
     for (0..40) |_| {
@@ -538,6 +587,7 @@ test "recovery: reconnects after forced close" {
 }
 
 test "recovery: topology is replayed after reconnect" {
+    const _t = TestTimer.start("recovery: topology is replayed after reconnect"); defer _t.stop();
     const conn_name = "bunny-zig.test.recovery-topology";
     const conn = try bunny.Connection.open(test_allocator, .{
         .host = testHost(),
@@ -564,7 +614,7 @@ test "recovery: topology is replayed after reconnect" {
     var http_client = try openHttpApiClient();
     defer http_client.deinit();
 
-    forceCloseConnections(&http_client);
+    forceCloseConnection(&http_client, conn_name);
 
     // Wait for closure and recovery
     for (0..40) |_| {
@@ -601,6 +651,7 @@ test "recovery: topology is replayed after reconnect" {
 //
 
 test "tx: commit publishes messages" {
+    const _t = TestTimer.start("tx: commit publishes messages"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -625,6 +676,7 @@ test "tx: commit publishes messages" {
 }
 
 test "tx: rollback discards messages" {
+    const _t = TestTimer.start("tx: rollback discards messages"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -647,6 +699,7 @@ test "tx: rollback discards messages" {
 //
 
 test "declare and use a quorum queue" {
+    const _t = TestTimer.start("declare and use a quorum queue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -672,6 +725,7 @@ test "declare and use a quorum queue" {
 //
 
 test "publish and consume empty body" {
+    const _t = TestTimer.start("publish and consume empty body"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -692,6 +746,7 @@ test "publish and consume empty body" {
 }
 
 test "publish and consume large message spanning multiple frames" {
+    const _t = TestTimer.start("publish and consume large message spanning multiple frames"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
@@ -723,6 +778,7 @@ test "publish and consume large message spanning multiple frames" {
 }
 
 test "two consumers on the same queue" {
+    const _t = TestTimer.start("two consumers on the same queue"); defer _t.stop();
     const conn = try openTestConnection();
     defer conn.deinit();
 

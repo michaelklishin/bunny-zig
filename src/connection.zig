@@ -5,6 +5,7 @@ const Thread = std.Thread;
 const Io = std.Io;
 const Mutex = Io.Mutex;
 const Condition = Io.Condition;
+const Notify = @import("notify.zig").Notify;
 const posix = std.posix;
 
 /// Get a usable Io context for mutex/condition/sleep operations.
@@ -78,6 +79,16 @@ pub const Endpoint = struct {
     port: u16,
 };
 
+/// Strategy for resolving the list of endpoints to connect to.
+/// Modeled after the Java client's AddressResolver interface.
+pub const AddressResolver = union(enum) {
+    /// Default: use host/port and hosts from ConnectionOptions directly
+    default,
+    /// Custom resolver function that returns endpoints to try, in order.
+    /// The returned slice must remain valid until the next call or connection close.
+    custom: *const fn () anyerror![]const Endpoint,
+};
+
 pub const ConnectionOptions = struct {
     host: []const u8 = "localhost",
     port: u16 = constants.default_port,
@@ -94,10 +105,14 @@ pub const ConnectionOptions = struct {
     connection_timeout_ms: u32 = 15_000,
     /// Maximum number of publisher confirm promises to cache per channel
     confirm_promise_pool_size: u16 = 64,
+    /// Timeout in seconds for RPC continuations (channel.open-ok,
+    /// queue.declare-ok, connection.close-ok, etc.)
+    continuation_timeout_s: u16 = 5,
     /// SASL mechanism: "PLAIN" (default) or "EXTERNAL" (x509 certificate auth)
     auth_mechanism: []const u8 = "PLAIN",
     tls: ?TlsOptions = null,
     recovery: recovery_mod.RecoveryConfig = .{},
+    address_resolver: AddressResolver = .default,
 
     /// Parse an AMQP URI into ConnectionOptions.
     /// Supports percent-encoded usernames, passwords, and vhosts.
@@ -182,7 +197,7 @@ pub const Connection = struct {
 
     // Waiting for RPC responses on channel 0
     rpc_mutex: Mutex = .init,
-    rpc_signal: Condition = .init,
+    rpc_signal: Notify = .init,
     rpc_response: ?Method = null,
 
     // Event callbacks (legacy)
@@ -199,15 +214,10 @@ pub const Connection = struct {
     // Blocked state
     blocked_reason: ?[]const u8 = null,
 
-    /// Open a new connection with the given options. Tries host:port first, then
-    /// each endpoint in hosts for redundancy.
+    /// Open a new connection with the given options. Resolves endpoints via the
+    /// address resolver, then tries each in order until one succeeds.
     pub fn open(allocator: Allocator, options: ConnectionOptions) !*Connection {
-        var transport = connectTransport(allocator, options, options.host, options.port) catch |primary_err| blk: {
-            for (options.hosts) |endpoint| {
-                break :blk connectTransport(allocator, options, endpoint.host, endpoint.port) catch continue;
-            }
-            return primary_err;
-        };
+        var transport = try resolveAndConnect(allocator, options);
         errdefer transport.close();
 
         const conn = try allocator.create(Connection);
@@ -265,8 +275,7 @@ pub const Connection = struct {
         } }) catch {};
         self.write_mutex.unlock(getIo());
 
-        // Wait up to 5 seconds for the server to acknowledge
-        _ = self.waitForRpc(5 * std.time.ns_per_s) catch {};
+        _ = self.waitForRpc(self.continuationTimeoutNs()) catch {};
 
         self.shutdown();
     }
@@ -504,10 +513,7 @@ pub const Connection = struct {
             log.info("recovery attempt {d}, waiting {d}ms", .{ attempt + 1, backoff_ms });
             getIo().sleep(.{ .nanoseconds = @intCast(backoff_ms * std.time.ns_per_ms) }, .boot) catch {};
 
-            const transport = connectTransport(self.allocator, self.options, self.options.host, self.options.port) catch |err| blk: {
-                for (self.options.hosts) |endpoint| {
-                    break :blk connectTransport(self.allocator, self.options, endpoint.host, endpoint.port) catch continue;
-                }
+            const transport = resolveAndConnect(self.allocator, self.options) catch |err| {
                 log.warn("recovery attempt {d} failed: {}", .{ attempt + 1, err });
                 attempt += 1;
                 continue;
@@ -773,6 +779,10 @@ pub const Connection = struct {
         }
     }
 
+    pub fn continuationTimeoutNs(self: *const Connection) u64 {
+        return @as(u64, self.options.continuation_timeout_s) * std.time.ns_per_s;
+    }
+
     fn waitForRpc(self: *Connection, timeout_ns: u64) !Method {
         const io = getIo();
         const start = Io.Timestamp.now(io, .boot);
@@ -784,11 +794,11 @@ pub const Connection = struct {
         while (self.rpc_response == null) {
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
-            const remaining: Io.Duration = .{ .nanoseconds = limit - elapsed };
-            const timeout: Io.Timeout = .{ .duration = .{ .raw = remaining, .clock = .awake } };
-            const epoch = self.rpc_signal.epoch.load(.acquire);
+            const remaining = limit - elapsed;
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = remaining }, .clock = .awake } };
+            const expected = self.rpc_signal.snapshot();
             self.rpc_mutex.unlock(io);
-            io.futexWaitTimeout(u32, &self.rpc_signal.epoch.raw, epoch, timeout) catch {};
+            self.rpc_signal.waitTimeout(io, expected, timeout);
             self.rpc_mutex.lockUncancelable(io);
         }
         const response = self.rpc_response.?;
@@ -800,13 +810,10 @@ pub const Connection = struct {
         self.is_open.store(false, .release);
         self.should_stop.store(true, .release);
 
-        // Unblock the reader thread from its blocking read
-        self.transport.shutdown();
-
-        // Wait for threads to exit BEFORE freeing transport resources
-        const io = getIo();
-        if (self.reader_thread != null) self.reader_exit.waitUncancelable(io);
-        if (self.heartbeat_thread != null) self.heartbeat_exit.waitUncancelable(io);
+        // Shut down the socket to unblock the reader thread's blocking readv.
+        // This makes readv return 0 (EOF) without closing the fd, avoiding
+        // a BADF panic in Zig's IO layer.
+        self.transport.shutdownSocket();
 
         if (self.reader_thread) |t| {
             t.join();
@@ -817,7 +824,6 @@ pub const Connection = struct {
             self.heartbeat_thread = null;
         }
 
-        // Now safe to call `close`: no threads referencing `transport`
         self.transport.close();
     }
 
@@ -894,6 +900,46 @@ pub const Connection = struct {
         self.write_mutex.lockUncancelable(getIo());
         defer self.write_mutex.unlock(getIo());
         try self.transport.sendPublish(channel_id, method, props, body, self.negotiated_frame_max, do_flush);
+    }
+
+    /// Send a batch of publishes (same exchange/routing key, different bodies).
+    pub fn sendPublishBatch(
+        self: *Connection,
+        channel_id: u16,
+        method: protocol.method.Method,
+        props: protocol.properties.BasicProperties,
+        bodies: []const []const u8,
+        do_flush: bool,
+    ) !void {
+        self.write_mutex.lockUncancelable(getIo());
+        defer self.write_mutex.unlock(getIo());
+        try self.transport.sendPublishBatch(channel_id, method, props, bodies, self.negotiated_frame_max, do_flush);
+    }
+
+    /// Resolve endpoints via the configured address resolver and try each
+    /// in order until a transport connection succeeds.
+    fn resolveAndConnect(allocator: Allocator, options: ConnectionOptions) !Transport {
+        switch (options.address_resolver) {
+            .custom => |resolver| {
+                const endpoints = try resolver();
+                var last_err: anyerror = error.ConnectionRefused;
+                for (endpoints) |ep| {
+                    return connectTransport(allocator, options, ep.host, ep.port) catch |err| {
+                        last_err = err;
+                        continue;
+                    };
+                }
+                return last_err;
+            },
+            .default => {
+                return connectTransport(allocator, options, options.host, options.port) catch |primary_err| {
+                    for (options.hosts) |endpoint| {
+                        return connectTransport(allocator, options, endpoint.host, endpoint.port) catch continue;
+                    }
+                    return primary_err;
+                };
+            },
+        }
     }
 
     fn connectTransport(allocator: Allocator, options: ConnectionOptions, host: []const u8, port: u16) !Transport {

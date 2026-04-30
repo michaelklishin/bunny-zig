@@ -14,6 +14,7 @@ pub const ChannelOpenError = @import("connection.zig").ChannelOpenError;
 pub const ChannelError = @import("connection.zig").ChannelError;
 pub const UriError = @import("connection.zig").UriError;
 pub const Endpoint = @import("connection.zig").Endpoint;
+pub const AddressResolver = @import("connection.zig").AddressResolver;
 pub const Channel = @import("channel.zig").Channel;
 pub const Delivery = @import("channel.zig").Delivery;
 pub const GetResult = @import("channel.zig").GetResult;
