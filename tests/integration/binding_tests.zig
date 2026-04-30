@@ -1,0 +1,37 @@
+const std = @import("std");
+const h = @import("test_helpers.zig");
+const testing = h.testing;
+
+test "bind and unbind a queue" {
+    const _t = h.TestTimer.start("bind and unbind a queue"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    try ch.declareDirect("bunny-zig.test.bind-exchange");
+    _ = try ch.queueDeclare("bunny-zig.test.bind-queue", .{ .exclusive = true, .auto_delete = true });
+
+    try ch.queueBind("bunny-zig.test.bind-queue", "bunny-zig.test.bind-exchange", "test.key");
+    try ch.queueUnbind("bunny-zig.test.bind-queue", "bunny-zig.test.bind-exchange", "test.key");
+
+    _ = try ch.queueDelete("bunny-zig.test.bind-queue");
+    try ch.exchangeDelete("bunny-zig.test.bind-exchange");
+}
+
+test "exchange-to-exchange binding" {
+    const _t = h.TestTimer.start("exchange-to-exchange binding"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    try ch.declareFanout("bunny-zig.test.e2e-source");
+    try ch.declareFanout("bunny-zig.test.e2e-dest");
+
+    try ch.exchangeBind("bunny-zig.test.e2e-dest", "bunny-zig.test.e2e-source", "");
+    try ch.exchangeUnbind("bunny-zig.test.e2e-dest", "bunny-zig.test.e2e-source", "");
+
+    try ch.exchangeDelete("bunny-zig.test.e2e-source");
+    try ch.exchangeDelete("bunny-zig.test.e2e-dest");
+}

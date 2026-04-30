@@ -1181,7 +1181,7 @@ pub const Channel = struct {
                 // Send close-ok immediately from the reader thread
                 self.connection.sendMethod(self.id, .{ .channel_close_ok = {} }) catch {};
                 self.connection.removeChannel(self.id);
-                log.err("channel {d} closed by server: [{d}] {s}", .{ self.id, cc.reply_code, cc.reply_text });
+                log.warn("channel {d} closed by server: [{d}] {s}", .{ self.id, cc.reply_code, cc.reply_text });
                 // Post as RPC response so any waiting caller sees it
                 self.rpc_mutex.lockUncancelable(getIo());
                 self.rpc_response = m;
