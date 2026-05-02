@@ -16,13 +16,17 @@ test "tx: commit publishes messages" {
     try ch.publishToQueue("bunny-zig.test.tx-commit", "tx message 2", .{});
     try ch.txCommit();
 
-    const msg1 = try h.pollBasicGet(ch, "bunny-zig.test.tx-commit");
-    try testing.expect(msg1 != null);
-    try ch.basicAck(msg1.?.delivery_tag, false);
+    const got_msg1 = try h.pollBasicGet(ch, "bunny-zig.test.tx-commit");
+    try testing.expect(got_msg1 != null);
+    var msg1 = got_msg1.?;
+    defer msg1.deinit(h.test_allocator);
+    try ch.basicAck(msg1.delivery_tag, false);
 
-    const msg2 = try h.pollBasicGet(ch, "bunny-zig.test.tx-commit");
-    try testing.expect(msg2 != null);
-    try ch.basicAck(msg2.?.delivery_tag, false);
+    const got_msg2 = try h.pollBasicGet(ch, "bunny-zig.test.tx-commit");
+    try testing.expect(got_msg2 != null);
+    var msg2 = got_msg2.?;
+    defer msg2.deinit(h.test_allocator);
+    try ch.basicAck(msg2.delivery_tag, false);
 
     _ = try ch.queueDelete("bunny-zig.test.tx-commit");
 }

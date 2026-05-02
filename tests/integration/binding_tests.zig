@@ -1,4 +1,5 @@
 const std = @import("std");
+const bunny = @import("bunny");
 const h = @import("test_helpers.zig");
 const testing = h.testing;
 
@@ -34,4 +35,29 @@ test "exchange-to-exchange binding" {
 
     try ch.exchangeDelete("bunny-zig.test.e2e-source");
     try ch.exchangeDelete("bunny-zig.test.e2e-dest");
+}
+
+test "auto-delete source exchange is removed when its last binding goes away" {
+    const _t = h.TestTimer.start("auto-delete source exchange is removed when its last binding goes away");
+    defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const src = "bunny-zig.test.auto-delete-source";
+    const dst = "bunny-zig.test.auto-delete-dest";
+    try ch.exchangeDeclare(src, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    try ch.exchangeDeclare(dst, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    defer ch.exchangeDelete(dst) catch {};
+
+    try ch.exchangeBind(dst, src, "");
+    try ch.exchangeUnbind(dst, src, "");
+
+    // Once the source's only binding is gone, the broker auto-deletes it.
+    // A passive declare against a missing exchange surfaces as a channel close.
+    const ch2 = try conn.openChannel();
+    defer ch2.closeChannel() catch {};
+    const result = ch2.exchangeDeclare(src, bunny.ExchangeType.fanout, .{ .passive = true });
+    try testing.expectError(error.ChannelClosed, result);
 }

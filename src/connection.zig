@@ -211,12 +211,17 @@ pub const Connection = struct {
     // Topology tracking for recovery
     topology: recovery_mod.TopologyRegistry = undefined,
 
-    // Blocked state
+    // Blocked state. blocked_reason is allocator-owned because the source slice
+    // points into the transport's read buffer, which is reused on the next frame.
+    blocked_mutex: Mutex = .init,
     blocked_reason: ?[]const u8 = null,
 
     /// Open a new connection with the given options. Resolves endpoints via the
     /// address resolver, then tries each in order until one succeeds.
     pub fn open(allocator: Allocator, options: ConnectionOptions) !*Connection {
+        if (options.frame_max != 0 and options.frame_max < constants.frame_min_size) {
+            return error.FrameMaxTooSmall;
+        }
         var transport = try resolveAndConnect(allocator, options);
         errdefer transport.close();
 
@@ -407,7 +412,7 @@ pub const Connection = struct {
                         } });
                     },
                     .connection_close => |cc| {
-                        log.err("connection refused: {s}", .{cc.reply_text});
+                        log.warn("connection refused: {s}", .{cc.reply_text});
                         if (cc.reply_code == 403) return error.AuthenticationFailed;
                         return error.ConnectionClosed;
                     },
@@ -420,6 +425,7 @@ pub const Connection = struct {
         // Negotiate values
         self.negotiated_channel_max = if (tune.channel_max == 0) self.options.channel_max else @min(tune.channel_max, self.options.channel_max);
         self.negotiated_frame_max = if (tune.frame_max == 0) self.options.frame_max else @min(tune.frame_max, self.options.frame_max);
+        if (self.negotiated_frame_max < constants.frame_min_size) return error.FrameMaxTooSmall;
         self.negotiated_heartbeat = if (self.options.heartbeat == 0) tune.heartbeat else @min(tune.heartbeat, self.options.heartbeat);
 
         // Send connection.tune-ok
@@ -440,7 +446,7 @@ pub const Connection = struct {
             .method => |mf| switch (mf.method) {
                 .connection_open_ok => {},
                 .connection_close => |cc| {
-                    log.err("connection open refused: {s}", .{cc.reply_text});
+                    log.warn("connection open refused: {s}", .{cc.reply_text});
                     return error.ConnectionClosed;
                 },
                 else => return error.ProtocolError,
@@ -621,10 +627,20 @@ pub const Connection = struct {
                                             .old_name = q.name,
                                             .new_name = ok.queue,
                                         } });
-                                        self.topology.updateQueueName(self.allocator, q.name, ok.queue) catch |err| {
-                                            log.err("failed to update queue name mapping: {}", .{err});
-                                        };
-                                        self.topology.entries.items[i].queue.name = ok.queue;
+                                        // The topology entry owns its name via self.allocator, but
+                                        // ok.queue aliases the response frame buffer that will be
+                                        // freed shortly. Dupe before swapping, free the old.
+                                        // On allocation failure, skip this entry but keep replaying
+                                        // the rest, the connection is otherwise usable.
+                                        if (self.allocator.dupe(u8, ok.queue)) |new_owned| {
+                                            self.topology.updateQueueName(self.allocator, q.name, ok.queue) catch |err| {
+                                                log.err("failed to update queue name mapping: {}", .{err});
+                                            };
+                                            self.allocator.free(self.topology.entries.items[i].queue.name);
+                                            self.topology.entries.items[i].queue.name = new_owned;
+                                        } else |err| {
+                                            log.err("failed to dupe new queue name: {}", .{err});
+                                        }
                                     }
                                 },
                                 else => {},
@@ -673,11 +689,16 @@ pub const Connection = struct {
 
     /// Whether the connection is currently blocked by the server.
     pub fn isBlocked(self: *Connection) bool {
+        self.blocked_mutex.lockUncancelable(getIo());
+        defer self.blocked_mutex.unlock(getIo());
         return self.blocked_reason != null;
     }
 
-    /// The reason the connection was blocked, or null if not blocked.
+    /// The reason the connection was blocked, or null if not blocked. The
+    /// returned slice is valid only until the next blocked or unblocked event.
     pub fn blockedReason(self: *Connection) ?[]const u8 {
+        self.blocked_mutex.lockUncancelable(getIo());
+        defer self.blocked_mutex.unlock(getIo());
         return self.blocked_reason;
     }
 
@@ -729,12 +750,24 @@ pub const Connection = struct {
                 self.rpc_mutex.unlock(getIo());
             },
             .connection_blocked => |b| {
-                self.blocked_reason = b.reason;
-                if (self.on_blocked) |cb| cb(b.reason);
-                self.event_listeners.emit(.{ .blocked = b.reason });
+                // Take an owned copy so observers see the same slice the
+                // connection records. If the dupe fails, drop the reason string
+                // (the connection is still blocked, callers can check isBlocked)
+                // and emit an empty reason rather than the transient frame slice.
+                const owned: ?[]const u8 = self.allocator.dupe(u8, b.reason) catch null;
+                self.blocked_mutex.lockUncancelable(getIo());
+                if (self.blocked_reason) |old| self.allocator.free(old);
+                self.blocked_reason = owned;
+                self.blocked_mutex.unlock(getIo());
+                const emitted: []const u8 = owned orelse "";
+                if (self.on_blocked) |cb| cb(emitted);
+                self.event_listeners.emit(.{ .blocked = emitted });
             },
             .connection_unblocked => {
+                self.blocked_mutex.lockUncancelable(getIo());
+                if (self.blocked_reason) |old| self.allocator.free(old);
                 self.blocked_reason = null;
+                self.blocked_mutex.unlock(getIo());
                 if (self.on_unblocked) |cb| cb();
                 self.event_listeners.emit(.{ .unblocked = {} });
             },
@@ -841,6 +874,7 @@ pub const Connection = struct {
 
         self.event_listeners.deinit(self.allocator);
         self.topology.deinit(self.allocator);
+        if (self.blocked_reason) |r| self.allocator.free(r);
         self.allocator.destroy(self);
     }
 

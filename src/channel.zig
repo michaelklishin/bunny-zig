@@ -53,7 +53,7 @@ const ConsumerWorkPool = @import("consumer_work_pool.zig").ConsumerWorkPool;
 
 const log = std.log.scoped(.bunny_channel);
 
-/// A delivered message from the server.
+/// A delivered message. Owns its storage, call `deinit` when done.
 pub const Delivery = struct {
     consumer_tag: []const u8,
     delivery_tag: u64,
@@ -63,13 +63,21 @@ pub const Delivery = struct {
     properties: BasicProperties,
     body: []const u8,
 
-    /// Get body as a string (assuming UTF-8).
     pub fn bodyString(self: Delivery) []const u8 {
         return self.body;
     }
+
+    pub fn deinit(self: *Delivery, allocator: std.mem.Allocator) void {
+        allocator.free(self.consumer_tag);
+        allocator.free(self.exchange);
+        allocator.free(self.routing_key);
+        self.properties.deinitOwned(allocator);
+        if (self.body.len > 0) allocator.free(self.body);
+        self.* = undefined;
+    }
 };
 
-/// Result of a basic.get operation.
+/// Result of basic.get. Owns its storage, call `deinit` when done.
 pub const GetResult = struct {
     delivery_tag: u64,
     redelivered: bool,
@@ -78,6 +86,14 @@ pub const GetResult = struct {
     message_count: u32,
     properties: BasicProperties,
     body: []const u8,
+
+    pub fn deinit(self: *GetResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.exchange);
+        allocator.free(self.routing_key);
+        self.properties.deinitOwned(allocator);
+        if (self.body.len > 0) allocator.free(self.body);
+        self.* = undefined;
+    }
 };
 
 /// Result of a queue.declare operation.
@@ -87,7 +103,7 @@ pub const QueueInfo = struct {
     consumer_count: u32,
 };
 
-/// A returned message (when mandatory/immediate fails).
+/// A returned message (mandatory/immediate failure). Owns its storage, call `deinit` when done.
 pub const ReturnedMessage = struct {
     reply_code: u16,
     reply_text: []const u8,
@@ -95,6 +111,15 @@ pub const ReturnedMessage = struct {
     routing_key: []const u8,
     properties: BasicProperties,
     body: []const u8,
+
+    pub fn deinit(self: *ReturnedMessage, allocator: std.mem.Allocator) void {
+        allocator.free(self.reply_text);
+        allocator.free(self.exchange);
+        allocator.free(self.routing_key);
+        self.properties.deinitOwned(allocator);
+        if (self.body.len > 0) allocator.free(self.body);
+        self.* = undefined;
+    }
 };
 
 /// Consumer acknowledgement mode.
@@ -197,8 +222,8 @@ pub const Channel = struct {
     deliveries: std.ArrayList(Delivery) = .empty,
     delivery_head: usize = 0,
 
-    // Returned messages
-    returns: std.ArrayList(ReturnedMessage) = .empty,
+    // Returned messages: dispatched to on_return if set, dropped otherwise.
+    // The framework deinits the message after the handler returns.
     on_return: ?*const fn (ReturnedMessage) void = null,
     on_cancel: ?*const fn ([]const u8) void = null,
 
@@ -238,8 +263,10 @@ pub const Channel = struct {
     pub fn deinit(self: *Channel) void {
         self.pending_body.deinit(self.allocator);
         self.get_body.deinit(self.allocator);
+        self.get_properties.deinitOwned(self.allocator);
+        // Drop any deliveries the application never received.
+        for (self.deliveries.items[self.delivery_head..]) |*d| d.deinit(self.allocator);
         self.deliveries.deinit(self.allocator);
-        self.returns.deinit(self.allocator);
         self.confirm_promises.deinit();
         for (self.promise_pool.items) |p| self.allocator.destroy(p);
         self.promise_pool.deinit(self.allocator);
@@ -840,8 +867,9 @@ pub const Channel = struct {
     }
 
     /// Synchronous fetch (basic.get). Returns null if the queue is empty.
+    /// The caller owns the result and must call `deinit`.
     pub fn basicGet(self: *Channel, queue: []const u8, ack_mode: AckMode) !?GetResult {
-        // Reset content state before sending to avoid races with the reader thread
+        // Reset content state before sending to avoid races with the reader thread.
         self.rpc_mutex.lockUncancelable(getIo());
         self.get_ready = false;
         self.rpc_mutex.unlock(getIo());
@@ -854,13 +882,18 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .basic_get_ok => |ok| {
-                // Wait for header + body
-                const content = try self.awaitContent();
+                const a = self.allocator;
+                // ok.exchange/routing_key alias the read buffer; dupe before it is reused.
+                const exchange = try a.dupe(u8, ok.exchange);
+                errdefer a.free(exchange);
+                const routing_key = try a.dupe(u8, ok.routing_key);
+                errdefer a.free(routing_key);
+                const content = try self.takeOwnedGetContent();
                 return .{
                     .delivery_tag = ok.delivery_tag,
                     .redelivered = ok.redelivered,
-                    .exchange = ok.exchange,
-                    .routing_key = ok.routing_key,
+                    .exchange = exchange,
+                    .routing_key = routing_key,
                     .message_count = ok.message_count,
                     .properties = content.properties,
                     .body = content.body,
@@ -907,6 +940,22 @@ pub const Channel = struct {
             .delivery_tag = delivery_tag,
             .requeue = requeue,
         } });
+    }
+
+    /// Ask the broker to redeliver all unacknowledged messages on this channel.
+    /// requeue=true puts them back on the queue for any consumer; requeue=false
+    /// is not implemented by RabbitMQ and the broker closes the channel with 540.
+    pub fn basicRecover(self: *Channel, requeue: bool) !void {
+        try self.connection.sendMethod(self.id, .{ .basic_recover = .{ .requeue = requeue } });
+        const response = try self.awaitMethod();
+        switch (response) {
+            .basic_recover_ok => {},
+            .channel_close => |cc| {
+                try self.handleChannelClose(cc);
+                return error.ChannelClosed;
+            },
+            else => return error.ProtocolError,
+        }
     }
 
     //
@@ -1214,67 +1263,114 @@ pub const Channel = struct {
 
         if (self.pending_method) |m| {
             switch (m) {
-                .basic_deliver => |deliver| {
-                    // Transfer ownership of pending_body to the delivery (zero copy)
-                    const owned_body = self.pending_body.toOwnedSlice(self.allocator) catch
-                        self.allocator.dupe(u8, body) catch return;
-                    const delivery = Delivery{
-                        .consumer_tag = deliver.consumer_tag,
-                        .delivery_tag = deliver.delivery_tag,
-                        .redelivered = deliver.redelivered,
-                        .exchange = deliver.exchange,
-                        .routing_key = deliver.routing_key,
-                        .properties = header.properties,
-                        .body = owned_body,
-                    };
-
-                    if (self.consumer_callbacks.get(deliver.consumer_tag)) |cb| {
-                        if (self.work_pool) |pool| {
-                            pool.submit(cb, delivery);
-                        } else {
-                            cb(delivery);
-                        }
-                    } else {
-                        self.delivery_mutex.lockUncancelable(getIo());
-                        self.deliveries.append(self.allocator, delivery) catch {
-                            log.err("failed to enqueue delivery: out of memory", .{});
-                            return;
-                        };
-                        self.delivery_signal.signal(getIo());
-                        self.delivery_mutex.unlock(getIo());
-                    }
-                },
-                .basic_return => |ret| {
-                    const returned = ReturnedMessage{
-                        .reply_code = ret.reply_code,
-                        .reply_text = ret.reply_text,
-                        .exchange = ret.exchange,
-                        .routing_key = ret.routing_key,
-                        .properties = header.properties,
-                        .body = self.allocator.dupe(u8, body) catch return,
-                    };
-                    self.returns.append(self.allocator, returned) catch {
-                        log.err("failed to enqueue returned message: out of memory", .{});
-                    };
-                    if (self.on_return) |cb| cb(returned);
-                },
+                .basic_deliver => |deliver| self.dispatchDelivery(deliver, header.properties, body),
+                .basic_return => |ret| self.dispatchReturn(ret, header.properties, body),
                 else => {},
             }
             self.pending_method = null;
         } else {
-            // Content for basic.get-ok — store and signal
-            self.get_properties = header.properties;
-            self.get_body.clearRetainingCapacity();
-            self.get_body.appendSlice(self.allocator, body) catch {};
-            self.get_ready = true;
-
-            self.rpc_mutex.lockUncancelable(getIo());
-            self.rpc_signal.signal(getIo());
-            self.rpc_mutex.unlock(getIo());
+            self.deliverGetContent(header.properties, body);
         }
 
         self.pending_header = null;
         self.pending_body.clearRetainingCapacity();
+    }
+
+    fn dispatchDelivery(self: *Channel, deliver: anytype, props: BasicProperties, body: []const u8) void {
+        const a = self.allocator;
+        // Take ownership of pending_body to avoid a copy.
+        const owned_body = self.pending_body.toOwnedSlice(a) catch
+            a.dupe(u8, body) catch return;
+
+        var delivery = buildOwnedDelivery(a, deliver, props, owned_body) catch {
+            a.free(owned_body);
+            log.err("failed to allocate delivery", .{});
+            return;
+        };
+
+        if (self.consumer_callbacks.get(delivery.consumer_tag)) |cb| {
+            if (self.work_pool) |pool| {
+                pool.submit(cb, delivery);
+            } else {
+                cb(delivery);
+                delivery.deinit(a);
+            }
+            return;
+        }
+        self.delivery_mutex.lockUncancelable(getIo());
+        self.deliveries.append(a, delivery) catch {
+            self.delivery_mutex.unlock(getIo());
+            delivery.deinit(a);
+            log.err("failed to enqueue delivery", .{});
+            return;
+        };
+        self.delivery_signal.signal(getIo());
+        self.delivery_mutex.unlock(getIo());
+    }
+
+    fn dispatchReturn(self: *Channel, ret: anytype, props: BasicProperties, body: []const u8) void {
+        const cb = self.on_return orelse return;
+        const a = self.allocator;
+        var returned = buildOwnedReturn(a, ret, props, body) catch {
+            log.err("failed to allocate returned message", .{});
+            return;
+        };
+        cb(returned);
+        returned.deinit(a);
+    }
+
+    fn deliverGetContent(self: *Channel, props: BasicProperties, body: []const u8) void {
+        const a = self.allocator;
+        const owned_props = props.deepCopy(a) catch BasicProperties.default;
+        self.rpc_mutex.lockUncancelable(getIo());
+        self.get_properties.deinitOwned(a);
+        self.get_properties = owned_props;
+        self.get_body.clearRetainingCapacity();
+        self.get_body.appendSlice(a, body) catch {};
+        self.get_ready = true;
+        self.rpc_signal.signal(getIo());
+        self.rpc_mutex.unlock(getIo());
+    }
+
+    fn buildOwnedDelivery(a: Allocator, deliver: anytype, props: BasicProperties, body: []const u8) !Delivery {
+        const consumer_tag = try a.dupe(u8, deliver.consumer_tag);
+        errdefer a.free(consumer_tag);
+        const exchange = try a.dupe(u8, deliver.exchange);
+        errdefer a.free(exchange);
+        const routing_key = try a.dupe(u8, deliver.routing_key);
+        errdefer a.free(routing_key);
+        var owned_props = try props.deepCopy(a);
+        errdefer owned_props.deinitOwned(a);
+        return .{
+            .consumer_tag = consumer_tag,
+            .delivery_tag = deliver.delivery_tag,
+            .redelivered = deliver.redelivered,
+            .exchange = exchange,
+            .routing_key = routing_key,
+            .properties = owned_props,
+            .body = body,
+        };
+    }
+
+    fn buildOwnedReturn(a: Allocator, ret: anytype, props: BasicProperties, body: []const u8) !ReturnedMessage {
+        const reply_text = try a.dupe(u8, ret.reply_text);
+        errdefer a.free(reply_text);
+        const exchange = try a.dupe(u8, ret.exchange);
+        errdefer a.free(exchange);
+        const routing_key = try a.dupe(u8, ret.routing_key);
+        errdefer a.free(routing_key);
+        var owned_props = try props.deepCopy(a);
+        errdefer owned_props.deinitOwned(a);
+        const owned_body = try a.dupe(u8, body);
+        errdefer a.free(owned_body);
+        return .{
+            .reply_code = ret.reply_code,
+            .reply_text = reply_text,
+            .exchange = exchange,
+            .routing_key = routing_key,
+            .properties = owned_props,
+            .body = owned_body,
+        };
     }
 
     /// Wait for the next RPC response (used by synchronous operations).
@@ -1311,8 +1407,9 @@ pub const Channel = struct {
         body: []const u8,
     };
 
-    /// Wait for content frames (header + body) to be assembled for basic.get-ok.
-    fn awaitContent(self: *Channel) !ContentResult {
+    /// Wait for header + body, then transfer ownership of the assembled
+    /// properties and body out of the channel's get_* state to the caller.
+    fn takeOwnedGetContent(self: *Channel) !ContentResult {
         const io = getIo();
         const timeout_ns = self.connection.continuationTimeoutNs();
         const start = Io.Timestamp.now(io, .boot);
@@ -1333,10 +1430,11 @@ pub const Channel = struct {
             self.rpc_mutex.lockUncancelable(io);
         }
 
-        return .{
-            .properties = self.get_properties,
-            .body = self.get_body.items,
-        };
+        const props = self.get_properties;
+        self.get_properties = BasicProperties.default;
+        const body = self.get_body.toOwnedSlice(self.allocator) catch &[_]u8{};
+        self.get_ready = false;
+        return .{ .properties = props, .body = body };
     }
 
     /// Called by RPC waiters that received channel_close as their response.

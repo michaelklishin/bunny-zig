@@ -63,6 +63,9 @@ pub const ConsumerWorkPool = struct {
         self.mutex.lockUncancelable(io);
         self.queue.pushBack(self.allocator, .{ .handler = handler, .delivery = delivery }) catch {
             self.mutex.unlock(io);
+            // Drop the delivery on backpressure rather than leak it.
+            var d = delivery;
+            d.deinit(self.allocator);
             return;
         };
         self.signal.signal(io);
@@ -79,6 +82,11 @@ pub const ConsumerWorkPool = struct {
 
         for (self.workers) |w| w.join();
         const allocator = self.allocator;
+        // Drain undelivered items so their backing memory is freed.
+        while (self.queue.popFront()) |it| {
+            var d = it.delivery;
+            d.deinit(allocator);
+        }
         self.queue.deinit(allocator);
         allocator.free(self.workers);
         allocator.destroy(self);
@@ -91,19 +99,21 @@ pub const ConsumerWorkPool = struct {
             while (pool.queue.len == 0 and !pool.should_stop.load(.acquire)) {
                 pool.signal.waitUncancelable(io, &pool.mutex);
             }
-            const item = pool.queue.popFront() orelse {
+            var item = pool.queue.popFront() orelse {
                 pool.mutex.unlock(io);
                 return;
             };
             pool.mutex.unlock(io);
 
             item.handler(item.delivery);
+            item.delivery.deinit(pool.allocator);
         }
     }
 };
 
 test "work pool: dispatches items" {
-    const pool = try ConsumerWorkPool.init(std.testing.allocator, 2);
+    const allocator = std.testing.allocator;
+    const pool = try ConsumerWorkPool.init(allocator, 2);
     defer pool.shutdown();
 
     var counter = std.atomic.Value(u32).init(0);
@@ -116,18 +126,18 @@ test "work pool: dispatches items" {
     };
     Handler.cnt = &counter;
 
-    const dummy = Delivery{
-        .consumer_tag = "",
-        .delivery_tag = 0,
-        .redelivered = false,
-        .exchange = "",
-        .routing_key = "",
-        .properties = @import("protocol.zig").properties.BasicProperties.default,
-        .body = "",
-    };
-
+    // Each submit consumes the delivery, build a fresh one per iteration.
     for (0..10) |_| {
-        pool.submit(&Handler.handle, dummy);
+        const d = Delivery{
+            .consumer_tag = try allocator.dupe(u8, ""),
+            .delivery_tag = 0,
+            .redelivered = false,
+            .exchange = try allocator.dupe(u8, ""),
+            .routing_key = try allocator.dupe(u8, ""),
+            .properties = @import("protocol.zig").properties.BasicProperties.default,
+            .body = try allocator.dupe(u8, ""),
+        };
+        pool.submit(&Handler.handle, d);
     }
 
     // Spin-wait for all items to be processed

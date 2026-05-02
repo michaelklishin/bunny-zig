@@ -30,11 +30,15 @@ test "two consumers on the same queue" {
     var count: u32 = 0;
     for (0..200) |_| {
         if (count >= 4) break;
-        if (ch1.tryRecvDelivery()) |d| {
+        if (ch1.tryRecvDelivery()) |raw| {
+            var d = raw;
+            defer d.deinit(h.test_allocator);
             try ch1.basicAck(d.delivery_tag, false);
             count += 1;
         }
-        if (ch2.tryRecvDelivery()) |d| {
+        if (ch2.tryRecvDelivery()) |raw| {
+            var d = raw;
+            defer d.deinit(h.test_allocator);
             try ch2.basicAck(d.delivery_tag, false);
             count += 1;
         }
@@ -43,6 +47,95 @@ test "two consumers on the same queue" {
     try testing.expectEqual(4, count);
 
     _ = try ch1.queueDelete("bunny-zig.test.two-consumers");
+}
+
+test "consume with automatic ack does not require manual acknowledgement" {
+    const _t = h.TestTimer.start("consume with automatic ack does not require manual acknowledgement");
+    defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const q = "bunny-zig.test.auto-ack";
+    _ = try ch.queueDeclare(q, .{ .durable = true });
+    defer _ = ch.queueDelete(q) catch {};
+
+    _ = try ch.basicConsume(q, "", .automatic);
+
+    try ch.confirmSelect();
+    try ch.publishToQueue(q, "auto-acked", .{});
+    _ = try ch.waitForConfirms();
+
+    const got = try ch.recvDelivery();
+    try testing.expect(got != null);
+    var m = got.?;
+    defer m.deinit(h.test_allocator);
+    try testing.expectEqualSlices(u8, "auto-acked", m.body);
+
+    // No ack call. A passive redeclare reports the queue is empty because
+    // the broker considers the message acknowledged the moment it was sent.
+    const info = try ch.queueDeclare(q, .{ .passive = true });
+    try testing.expectEqual(0, info.message_count);
+}
+
+test "consume returns the consumer tag the client supplied" {
+    const _t = h.TestTimer.start("consume returns the consumer tag the client supplied"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const q = "bunny-zig.test.consumer-tag";
+    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+
+    const requested = "bunny-zig.requested-tag";
+    const got = try ch.basicConsume(q, requested, .manual);
+    try testing.expectEqualSlices(u8, requested, got);
+}
+
+test "client-initiated basic.cancel stops further deliveries" {
+    const _t = h.TestTimer.start("client-initiated basic.cancel stops further deliveries"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const q = "bunny-zig.test.client-cancel";
+    _ = try ch.queueDeclare(q, .{ .durable = true });
+    defer _ = ch.queueDelete(q) catch {};
+
+    const tag = try ch.basicConsume(q, "", .manual);
+
+    try ch.confirmSelect();
+    try ch.publishToQueue(q, "before-cancel", .{});
+    _ = try ch.waitForConfirms();
+
+    const got_first = try ch.recvDelivery();
+    try testing.expect(got_first != null);
+    var first = got_first.?;
+    defer first.deinit(h.test_allocator);
+    try ch.basicAck(first.delivery_tag, false);
+
+    try ch.basicCancel(tag);
+
+    // After cancel, new messages are routed but not delivered to this consumer;
+    // they accumulate in the queue and can be retrieved via basic.get.
+    try ch.publishToQueue(q, "after-cancel", .{});
+    _ = try ch.waitForConfirms();
+
+    // Asserting against message_count is more robust than tryRecvDelivery,
+    // which may race with an in-flight deliver the broker buffered before
+    // processing the cancel.
+    const info = try ch.queueDeclare(q, .{ .passive = true });
+    try testing.expectEqual(@as(u32, 1), info.message_count);
+
+    const got_via = try h.pollBasicGet(ch, q);
+    try testing.expect(got_via != null);
+    var via_get = got_via.?;
+    defer via_get.deinit(h.test_allocator);
+    try testing.expectEqualSlices(u8, "after-cancel", via_get.body);
+    try ch.basicAck(via_get.delivery_tag, false);
 }
 
 test "server-initiated basic.cancel fires when queue is deleted" {
@@ -78,3 +171,107 @@ test "server-initiated basic.cancel fires when queue is deleted" {
     while (Cancel.fired.load(.acquire) == 0 and attempts < 100) : (attempts += 1) h.sleepMs(20);
     try testing.expectEqual(1, Cancel.fired.load(.acquire));
 }
+
+test "client-initiated basic.cancel for an unknown consumer tag is silently accepted" {
+    const _t = h.TestTimer.start("client-initiated basic.cancel for an unknown consumer tag is silently accepted");
+    defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    // RabbitMQ returns basic.cancel-ok for unknown consumer tags without raising
+    // a channel exception, matching the behavior other clients rely on.
+    try ch.basicCancel("never-existed");
+    try testing.expect(ch.isOpen());
+}
+
+test "client-initiated basic.cancel does not requeue unacknowledged messages" {
+    const _t = h.TestTimer.start("client-initiated basic.cancel does not requeue unacknowledged messages");
+    defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const q = "bunny-zig.test.cancel-no-requeue";
+    // Durable, not auto_delete: cancelling the consumer would auto-delete an
+    // auto_delete queue, breaking the passive declare assertion below.
+    _ = try ch.queueDeclare(q, .{ .durable = true });
+    defer _ = ch.queueDelete(q) catch {};
+
+    try ch.confirmSelect();
+    try ch.publishToQueue(q, "hold", .{});
+    _ = try ch.waitForConfirms();
+
+    const tag = try ch.basicConsume(q, "", .manual);
+    const got = try ch.recvDelivery();
+    try testing.expect(got != null);
+    var d = got.?;
+    defer d.deinit(h.test_allocator);
+
+    try ch.basicCancel(tag);
+
+    // Cancel does not requeue. The message stays unacked, owned by this
+    // consumer's channel. queueDeclare passive shows an empty 'ready' state.
+    h.sleepMs(100);
+    const info = try ch.queueDeclare(q, .{ .passive = true });
+    try testing.expectEqual(@as(u32, 0), info.message_count);
+
+    try ch.basicAck(d.delivery_tag, false);
+}
+
+test "single-active-consumer: only one consumer receives messages at a time" {
+    const _t = h.TestTimer.start("single-active-consumer: only one consumer receives messages at a time");
+    defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+
+    const ch1 = try conn.openChannel();
+    defer ch1.closeChannel() catch {};
+    const ch2 = try conn.openChannel();
+    defer ch2.closeChannel() catch {};
+
+    const bunny = @import("bunny");
+    var entries = [_]bunny.FieldTable.Entry{
+        .{ .key = "x-single-active-consumer", .value = .{ .boolean = true } },
+    };
+    const args: bunny.FieldTable = .{ .entries = &entries, .allocator = undefined };
+
+    const q = "bunny-zig.test.single-active";
+    _ = try ch1.queueDeclare(q, .{ .durable = true, .arguments = args });
+    defer _ = ch1.queueDelete(q) catch {};
+
+    _ = try ch1.basicConsume(q, "active", .manual);
+    _ = try ch2.basicConsume(q, "standby", .manual);
+
+    try ch1.confirmSelect();
+    for (0..4) |i| {
+        var buf: [16]u8 = undefined;
+        const body = std.fmt.bufPrint(&buf, "m-{d}", .{i}) catch "m";
+        try ch1.publishToQueue(q, body, .{});
+    }
+    _ = try ch1.waitForConfirms();
+
+    var active_count: u32 = 0;
+    var standby_count: u32 = 0;
+    for (0..80) |_| {
+        if (ch1.tryRecvDelivery()) |raw| {
+            var d = raw;
+            defer d.deinit(h.test_allocator);
+            try ch1.basicAck(d.delivery_tag, false);
+            active_count += 1;
+        }
+        if (ch2.tryRecvDelivery()) |raw| {
+            var d = raw;
+            defer d.deinit(h.test_allocator);
+            try ch2.basicAck(d.delivery_tag, false);
+            standby_count += 1;
+        }
+        if (active_count + standby_count >= 4) break;
+        h.sleepMs(25);
+    }
+    try testing.expectEqual(@as(u32, 4), active_count);
+    try testing.expectEqual(@as(u32, 0), standby_count);
+}
+

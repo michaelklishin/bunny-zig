@@ -10,13 +10,11 @@ pub const testing = std.testing;
 pub const BasicProperties = bunny.BasicProperties;
 
 pub fn testHost() []const u8 {
-    const env = std.c.getenv("BUNNY_ZIG_HOST");
-    return if (env) |e| std.mem.sliceTo(e, 0) else "127.0.0.1";
+    return std.testing.environ.getPosix("BUNNY_ZIG_HOST") orelse "127.0.0.1";
 }
 
 pub fn testPort() u16 {
-    const env = std.c.getenv("BUNNY_ZIG_PORT");
-    const port_str: []const u8 = if (env) |e| std.mem.sliceTo(e, 0) else "5672";
+    const port_str = std.testing.environ.getPosix("BUNNY_ZIG_PORT") orelse "5672";
     return std.fmt.parseInt(u16, port_str, 10) catch 5672;
 }
 
@@ -72,16 +70,55 @@ pub fn openHttpApiClient() !api.Client {
 }
 
 /// Force-close a specific connection via the HTTP API,
-/// identified by its client-provided connection name.
+/// identified by its client-provided connection name. Polls until the
+/// management API has registered the connection: a fire-and-forget lookup
+/// races with the broker and silently no-ops if the connection is not yet
+/// listed.
 pub fn forceCloseConnection(http_client: *api.Client, connection_name: []const u8) void {
-    sleepMs(1200);
-    const conns = (http_client.listConnections() catch return).value;
-    for (conns) |ci| {
-        const cp = ci.client_properties orelse continue;
-        const cn = cp.connection_name orelse continue;
-        if (std.mem.eql(u8, cn, connection_name)) {
-            http_client.closeConnection(ci.name, "closed by bunny-zig tests", true) catch {};
+    var attempt: u32 = 0;
+    while (attempt < 40) : (attempt += 1) {
+        const conns = (http_client.listConnections() catch {
+            sleepMs(250);
+            continue;
+        }).value;
+        for (conns) |ci| {
+            const cp = ci.client_properties orelse continue;
+            const cn = cp.connection_name orelse continue;
+            if (std.mem.eql(u8, cn, connection_name)) {
+                http_client.closeConnection(ci.name, "closed by bunny-zig tests", true) catch {};
+                sleepMs(500);
+                return;
+            }
         }
+        sleepMs(250);
     }
-    sleepMs(500);
+}
+
+/// Resolve the rabbitmqctl binary, honoring BUNNY_RABBITMQCTL.
+fn rabbitmqctlPath() ?[]const u8 {
+    const value = std.testing.environ.getPosix("BUNNY_RABBITMQCTL") orelse return null;
+    return if (value.len > 0) value else null;
+}
+
+/// Invoke rabbitmqctl with the given arguments. Returns false if the binary
+/// is unavailable (BUNNY_RABBITMQCTL unset) or the command failed.
+pub fn runRabbitmqctl(args: []const []const u8) bool {
+    const ctl = rabbitmqctlPath() orelse return false;
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(test_allocator);
+    argv.append(test_allocator, ctl) catch return false;
+    argv.appendSlice(test_allocator, args) catch return false;
+
+    var child = std.process.spawn(testing.io, .{
+        .argv = argv.items,
+        // rabbitmqctl reads tool-version files from the cwd, so use a neutral one.
+        .cwd = .{ .path = "/tmp" },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return false;
+
+    const term = child.wait(testing.io) catch return false;
+    return term == .exited and term.exited == 0;
 }

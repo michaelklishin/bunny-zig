@@ -52,6 +52,36 @@ test "publisher confirms: per-message tracking" {
     _ = try ch.queueDelete("bunny-zig.test.confirms-tracking");
 }
 
+test "confirm.select is idempotent" {
+    const _t = h.TestTimer.start("confirm.select is idempotent"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    try ch.confirmSelect();
+    try ch.confirmSelect();
+    try testing.expect(ch.confirm_mode);
+}
+
+test "publishing to a non-existent exchange closes the channel" {
+    const _t = h.TestTimer.start("publishing to a non-existent exchange closes the channel"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    try ch.confirmSelect();
+    try ch.publish("orphan", .{ .exchange = "bunny-zig.test.no-such-exchange", .routing_key = "k" });
+
+    // The error surfaces on the next synchronous RPC. waitForConfirms
+    // returns ChannelClosed once the broker tears the channel down.
+    const result = ch.waitForConfirms();
+    try testing.expectError(error.ChannelClosed, result);
+    try testing.expect(!ch.isOpen());
+    try testing.expect(conn.isOpen());
+}
+
 test "publisher confirms: per-message tracking with backpressure" {
     const _t = h.TestTimer.start("publisher confirms: per-message tracking with backpressure"); defer _t.stop();
     const conn = try h.openTestConnection();

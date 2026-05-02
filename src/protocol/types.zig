@@ -119,6 +119,43 @@ pub const FieldValue = union(enum) {
         }
     }
 
+    /// Deep-copy: result owns all allocations independently of the source.
+    pub fn deepCopy(self: FieldValue, allocator: Allocator) Allocator.Error!FieldValue {
+        return switch (self) {
+            .short_string => |s| .{ .short_string = try allocator.dupe(u8, s) },
+            .long_string => |s| .{ .long_string = try allocator.dupe(u8, s) },
+            .byte_array => |b| .{ .byte_array = try allocator.dupe(u8, b) },
+            .table => |t| .{ .table = try t.deepCopy(allocator) },
+            .array => |items| blk: {
+                const copied = try allocator.alloc(FieldValue, items.len);
+                var n: usize = 0;
+                errdefer {
+                    for (copied[0..n]) |*v| v.deinitOwned(allocator);
+                    allocator.free(copied);
+                }
+                while (n < items.len) : (n += 1) copied[n] = try items[n].deepCopy(allocator);
+                break :blk .{ .array = copied };
+            },
+            else => self,
+        };
+    }
+
+    /// Free what `deepCopy` allocated. No-op for inline scalars.
+    pub fn deinitOwned(self: *FieldValue, allocator: Allocator) void {
+        switch (self.*) {
+            .short_string, .long_string, .byte_array => |s| allocator.free(s),
+            .table => |*t| t.deinitOwned(allocator),
+            .array => |items| {
+                for (items) |item| {
+                    var v = item;
+                    v.deinitOwned(allocator);
+                }
+                allocator.free(items);
+            },
+            else => {},
+        }
+    }
+
     /// Decode a field value from raw bytes.
     pub fn decode(data: []const u8, allocator: Allocator, depth: u8) DecodeError!DecodeResult {
         if (depth > max_table_nesting) return error.TableNestingTooDeep;
@@ -256,6 +293,39 @@ pub const FieldTable = struct {
         if (self.entries.len > 0) {
             self.allocator.free(self.entries);
         }
+        self.entries = &.{};
+    }
+
+    /// Deep-copy: result owns all allocations independently of the source.
+    pub fn deepCopy(self: FieldTable, allocator: Allocator) Allocator.Error!FieldTable {
+        const copied = try allocator.alloc(Entry, self.entries.len);
+        var n: usize = 0;
+        errdefer {
+            for (copied[0..n]) |*e| {
+                allocator.free(e.key);
+                e.value.deinitOwned(allocator);
+            }
+            allocator.free(copied);
+        }
+        while (n < self.entries.len) : (n += 1) {
+            const key_copy = try allocator.dupe(u8, self.entries[n].key);
+            errdefer allocator.free(key_copy);
+            copied[n] = .{
+                .key = key_copy,
+                .value = try self.entries[n].value.deepCopy(allocator),
+            };
+        }
+        return .{ .entries = copied, .allocator = allocator };
+    }
+
+    /// Free what `deepCopy` allocated.
+    pub fn deinitOwned(self: *FieldTable, allocator: Allocator) void {
+        for (self.entries) |entry| {
+            allocator.free(entry.key);
+            var v = entry.value;
+            v.deinitOwned(allocator);
+        }
+        if (self.entries.len > 0) allocator.free(self.entries);
         self.entries = &.{};
     }
 

@@ -158,6 +158,45 @@ pub const BasicProperties = struct {
         if (self.cluster_id) |v| wb.writeShortString(v);
     }
 
+    /// Deep-copy: result owns all allocations independently of the source.
+    pub fn deepCopy(self: BasicProperties, allocator: Allocator) Allocator.Error!BasicProperties {
+        var out: BasicProperties = .{
+            .delivery_mode = self.delivery_mode,
+            .priority = self.priority,
+            .timestamp = self.timestamp,
+        };
+        errdefer out.deinitOwned(allocator);
+
+        if (self.content_type) |v| out.content_type = try allocator.dupe(u8, v);
+        if (self.content_encoding) |v| out.content_encoding = try allocator.dupe(u8, v);
+        if (self.correlation_id) |v| out.correlation_id = try allocator.dupe(u8, v);
+        if (self.reply_to) |v| out.reply_to = try allocator.dupe(u8, v);
+        if (self.expiration) |v| out.expiration = try allocator.dupe(u8, v);
+        if (self.message_id) |v| out.message_id = try allocator.dupe(u8, v);
+        if (self.type) |v| out.type = try allocator.dupe(u8, v);
+        if (self.user_id) |v| out.user_id = try allocator.dupe(u8, v);
+        if (self.app_id) |v| out.app_id = try allocator.dupe(u8, v);
+        if (self.cluster_id) |v| out.cluster_id = try allocator.dupe(u8, v);
+        if (self.headers) |h| out.headers = try h.deepCopy(allocator);
+        return out;
+    }
+
+    /// Free what `deepCopy` allocated. Safe on default-initialised values.
+    pub fn deinitOwned(self: *BasicProperties, allocator: Allocator) void {
+        if (self.content_type) |v| allocator.free(v);
+        if (self.content_encoding) |v| allocator.free(v);
+        if (self.correlation_id) |v| allocator.free(v);
+        if (self.reply_to) |v| allocator.free(v);
+        if (self.expiration) |v| allocator.free(v);
+        if (self.message_id) |v| allocator.free(v);
+        if (self.type) |v| allocator.free(v);
+        if (self.user_id) |v| allocator.free(v);
+        if (self.app_id) |v| allocator.free(v);
+        if (self.cluster_id) |v| allocator.free(v);
+        if (self.headers) |*h| h.deinitOwned(allocator);
+        self.* = .{};
+    }
+
     /// Decode properties from wire format.
     pub fn decode(reader: *WireReader, allocator: Allocator) !BasicProperties {
         const f = try reader.readU16();

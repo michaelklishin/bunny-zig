@@ -17,6 +17,8 @@ pub const frame_overhead: usize = frame_header_size + 1;
 
 // Default negotiation values
 pub const default_frame_max: u32 = 131_072;
+// AMQP 0-9-1 spec mandates frame_max >= 4096 once negotiated.
+pub const frame_min_size: u32 = 4096;
 pub const default_channel_max: u16 = 2047;
 pub const default_heartbeat: u16 = 60;
 pub const default_port: u16 = 5672;

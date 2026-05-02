@@ -28,7 +28,8 @@ test "publish with properties" {
 
     const result = try ch.basicGet("bunny-zig.test.props", .manual);
     try testing.expect(result != null);
-    const msg = result.?;
+    var msg = result.?;
+    defer msg.deinit(h.test_allocator);
     try testing.expectEqualSlices(u8, "application/json", msg.properties.content_type.?);
     try testing.expectEqual(2, msg.properties.delivery_mode.?);
     try testing.expectEqualSlices(u8, "msg-001", msg.properties.message_id.?);
@@ -52,10 +53,12 @@ test "persistent delivery_mode survives publish to consume roundtrip" {
     try ch.publishToQueue(q, "durable payload", .{ .delivery_mode = 2 });
     _ = try ch.waitForConfirms();
 
-    const msg = try h.pollBasicGet(ch, q);
-    try testing.expect(msg != null);
-    try testing.expectEqual(@as(?u8, 2), msg.?.properties.delivery_mode);
-    try ch.basicAck(msg.?.delivery_tag, false);
+    const got = try h.pollBasicGet(ch, q);
+    try testing.expect(got != null);
+    var msg = got.?;
+    defer msg.deinit(h.test_allocator);
+    try testing.expectEqual(@as(?u8, 2), msg.properties.delivery_mode);
+    try ch.basicAck(msg.delivery_tag, false);
 }
 
 test "basic properties round-trip through publish and basic.get" {
@@ -86,9 +89,11 @@ test "basic properties round-trip through publish and basic.get" {
     try ch.publishToQueue(q, "props body", props);
     _ = try ch.waitForConfirms();
 
-    const msg = try h.pollBasicGet(ch, q);
-    try testing.expect(msg != null);
-    const got = msg.?.properties;
+    const got_msg = try h.pollBasicGet(ch, q);
+    try testing.expect(got_msg != null);
+    var msg = got_msg.?;
+    defer msg.deinit(h.test_allocator);
+    const got = msg.properties;
     try testing.expectEqualSlices(u8, "application/json", got.content_type.?);
     try testing.expectEqualSlices(u8, "utf-8", got.content_encoding.?);
     try testing.expectEqual(@as(?u8, 2), got.delivery_mode);
@@ -100,5 +105,5 @@ test "basic properties round-trip through publish and basic.get" {
     try testing.expectEqual(@as(?u64, 1_700_000_000), got.timestamp);
     try testing.expectEqualSlices(u8, "bunny-zig-tests", got.app_id.?);
 
-    try ch.basicAck(msg.?.delivery_tag, false);
+    try ch.basicAck(msg.delivery_tag, false);
 }

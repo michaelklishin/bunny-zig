@@ -18,15 +18,19 @@ test "reject and requeue" {
     try ch.publishToQueue("bunny-zig.test.reject", "rejected message", .{});
     try testing.expect(try ch.waitForConfirms());
 
-    const delivery1 = try ch.recvDelivery();
-    try testing.expect(delivery1 != null);
-    try ch.basicReject(delivery1.?.delivery_tag, true);
+    const got1 = try ch.recvDelivery();
+    try testing.expect(got1 != null);
+    var delivery1 = got1.?;
+    defer delivery1.deinit(h.test_allocator);
+    try ch.basicReject(delivery1.delivery_tag, true);
 
-    // Wait for redelivered message via consumer
-    const delivery2 = try ch.recvDelivery();
-    try testing.expect(delivery2 != null);
-    try testing.expect(delivery2.?.redelivered);
-    try ch.basicAck(delivery2.?.delivery_tag, false);
+    // Wait for redelivered message via consumer.
+    const got2 = try ch.recvDelivery();
+    try testing.expect(got2 != null);
+    var delivery2 = got2.?;
+    defer delivery2.deinit(h.test_allocator);
+    try testing.expect(delivery2.redelivered);
+    try ch.basicAck(delivery2.delivery_tag, false);
 
     _ = try ch.queueDelete("bunny-zig.test.reject");
 }
@@ -46,13 +50,17 @@ test "nack with requeue" {
     try ch.publishToQueue("bunny-zig.test.nack", "nacked message", .{});
     try testing.expect(try ch.waitForConfirms());
 
-    const delivery1 = try ch.recvDelivery();
-    try testing.expect(delivery1 != null);
-    try ch.basicNack(delivery1.?.delivery_tag, false, true);
+    const got1 = try ch.recvDelivery();
+    try testing.expect(got1 != null);
+    var delivery1 = got1.?;
+    defer delivery1.deinit(h.test_allocator);
+    try ch.basicNack(delivery1.delivery_tag, false, true);
 
-    const delivery2 = try ch.recvDelivery();
-    try testing.expect(delivery2 != null);
-    try ch.basicAck(delivery2.?.delivery_tag, false);
+    const got2 = try ch.recvDelivery();
+    try testing.expect(got2 != null);
+    var delivery2 = got2.?;
+    defer delivery2.deinit(h.test_allocator);
+    try ch.basicAck(delivery2.delivery_tag, false);
 
     _ = try ch.queueDelete("bunny-zig.test.nack");
 }

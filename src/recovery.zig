@@ -239,13 +239,26 @@ pub const TopologyRegistry = struct {
 
     /// Update queue name in the registry after a server-named queue is redeclared.
     pub fn updateQueueName(self: *TopologyRegistry, allocator: Allocator, old_name: []const u8, new_name: []const u8) !void {
-        // Free the previous mapped value if overwriting an existing entry
-        if (self.queue_name_map.get(old_name)) |prev| {
-            allocator.free(prev);
+        // The map owns both keys and values: the caller's old_name lives
+        // inside a topology entry that may be reassigned later in the same
+        // recovery pass, and ok.queue aliases a transient frame buffer.
+        // getOrPut lets us reuse the existing key allocation when a previous
+        // recovery already inserted this old_name; we only dupe on insert.
+        const new_value = try allocator.dupe(u8, new_name);
+        errdefer allocator.free(new_value);
+
+        const gop = try self.queue_name_map.getOrPut(old_name);
+        if (gop.found_existing) {
+            allocator.free(gop.value_ptr.*);
+            gop.value_ptr.* = new_value;
+        } else {
+            const duped_key = allocator.dupe(u8, old_name) catch |err| {
+                self.queue_name_map.removeByPtr(gop.key_ptr);
+                return err;
+            };
+            gop.key_ptr.* = duped_key;
+            gop.value_ptr.* = new_value;
         }
-        const duped_map = try allocator.dupe(u8, new_name);
-        errdefer allocator.free(duped_map);
-        try self.queue_name_map.put(old_name, duped_map);
 
         for (self.entries.items) |*entry| {
             switch (entry.*) {
@@ -299,8 +312,11 @@ pub const TopologyRegistry = struct {
         for (self.entries.items) |entry| freeEntryStrings(allocator, entry);
         self.entries.deinit(allocator);
         self.channels.deinit(allocator);
-        var map_it = self.queue_name_map.valueIterator();
-        while (map_it.next()) |v| allocator.free(v.*);
+        var map_it = self.queue_name_map.iterator();
+        while (map_it.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+            allocator.free(kv.value_ptr.*);
+        }
         self.queue_name_map.deinit();
     }
 };
