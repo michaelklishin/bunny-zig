@@ -63,6 +63,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_bench = b.addRunArtifact(bench_exe);
+    if (b.args) |args| run_bench.addArgs(args);
     const bench_step = b.step("bench", "Run publish throughput benchmark (requires RabbitMQ)");
     bench_step.dependOn(&run_bench.step);
 
