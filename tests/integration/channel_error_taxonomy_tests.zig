@@ -3,47 +3,30 @@ const bunny = @import("bunny");
 const h = @import("test_helpers.zig");
 const testing = h.testing;
 
-// Channel-level errors all surface as error.ChannelClosed at the API. The
-// AMQP reply code is delivered on the channel close event, so each test
-// records it via an event listener and asserts the exact code.
-
-// `Captured` uses static globals: relies on Zig's serial test execution.
-const Captured = struct {
-    var code: std.atomic.Value(u16) = .init(0);
-    fn handler(ev: bunny.ChannelEvent) void {
-        switch (ev) {
-            .closed => |c| _ = code.store(c.code, .release),
-            else => {},
-        }
-    }
-};
-
-fn waitForCode() u16 {
-    var attempts: u32 = 0;
-    while (Captured.code.load(.acquire) == 0 and attempts < 100) : (attempts += 1) h.sleepMs(10);
-    return Captured.code.load(.acquire);
-}
+// Each AMQP reply code surfaces as a distinct typed error from the API call,
+// and the channel exposes the reply text and offending method via lastClose.
 
 test "channel error taxonomy: NOT_FOUND (404) on passive declare of a missing queue" {
     const _t = h.TestTimer.start("channel error taxonomy: NOT_FOUND (404) on passive declare of a missing queue");
     defer _t.stop();
-    Captured.code.store(0, .release);
 
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
-    try ch.event_listeners.add(h.test_allocator, &Captured.handler);
 
     const result = ch.queueDeclare("bunny-zig.test.taxonomy.404", .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
-    try testing.expectEqual(404, waitForCode());
+    try testing.expectError(error.NotFound, result);
+
+    const info = ch.lastClose() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u16, 404), info.reply_code);
+    try testing.expect(info.initiated_by_server);
+    try testing.expect(info.reply_text.len > 0);
 }
 
 test "channel error taxonomy: PRECONDITION_FAILED (406) on inequivalent redeclare" {
     const _t = h.TestTimer.start("channel error taxonomy: PRECONDITION_FAILED (406) on inequivalent redeclare");
     defer _t.stop();
-    Captured.code.store(0, .release);
 
     const conn = try h.openTestConnection();
     defer conn.deinit();
@@ -55,17 +38,17 @@ test "channel error taxonomy: PRECONDITION_FAILED (406) on inequivalent redeclar
 
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
-    try ch.event_listeners.add(h.test_allocator, &Captured.handler);
 
     const result = ch.queueDeclare(q, .{ .durable = false });
-    try testing.expectError(error.ChannelClosed, result);
-    try testing.expectEqual(406, waitForCode());
+    try testing.expectError(error.PreconditionFailed, result);
+
+    const info = ch.lastClose() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u16, 406), info.reply_code);
 }
 
 test "channel error taxonomy: RESOURCE_LOCKED (405) on cross-connection exclusive consume" {
     const _t = h.TestTimer.start("channel error taxonomy: RESOURCE_LOCKED (405) on cross-connection exclusive consume");
     defer _t.stop();
-    Captured.code.store(0, .release);
 
     const owner = try h.openTestConnection();
     defer owner.deinit();
@@ -78,9 +61,10 @@ test "channel error taxonomy: RESOURCE_LOCKED (405) on cross-connection exclusiv
     defer other.deinit();
     const other_ch = try other.openChannel();
     defer other_ch.closeChannel() catch {};
-    try other_ch.event_listeners.add(h.test_allocator, &Captured.handler);
 
     const result = other_ch.basicConsume(q, "", .manual);
-    try testing.expectError(error.ChannelClosed, result);
-    try testing.expectEqual(405, waitForCode());
+    try testing.expectError(error.ResourceLocked, result);
+
+    const info = other_ch.lastClose() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u16, 405), info.reply_code);
 }

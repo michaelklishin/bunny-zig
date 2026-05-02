@@ -43,7 +43,9 @@ const Method = method_mod.Method;
 const types = protocol.types;
 const FieldTable = types.FieldTable;
 const BasicProperties = protocol.properties.BasicProperties;
-const Connection = @import("connection.zig").Connection;
+const connection_mod = @import("connection.zig");
+const Connection = connection_mod.Connection;
+const ChannelError = connection_mod.ChannelError;
 const Queue = @import("queue.zig").Queue;
 const Exchange = @import("exchange.zig").Exchange;
 const recovery_mod = @import("recovery.zig");
@@ -102,6 +104,45 @@ pub const QueueInfo = struct {
     message_count: u32,
     consumer_count: u32,
 };
+
+/// Server-initiated channel.close details, surfaced after a typed error
+/// returns from an API call. Owns `reply_text`.
+pub const ChannelCloseInfo = struct {
+    reply_code: u16,
+    reply_text: []const u8,
+    class_id: u16,
+    method_id: u16,
+    initiated_by_server: bool,
+
+    pub fn deinit(self: *ChannelCloseInfo, allocator: std.mem.Allocator) void {
+        allocator.free(self.reply_text);
+        self.* = undefined;
+    }
+};
+
+/// Map an AMQP reply code to a typed error. Codes outside the AMQP set, and
+/// the success code 200, fall back to `error.ChannelClosed`.
+pub fn replyCodeToError(reply_code: u16) ChannelError {
+    return switch (reply_code) {
+        311 => error.ContentTooLarge,
+        313 => error.NoConsumers,
+        320 => error.ConnectionForced,
+        402 => error.InvalidPath,
+        403 => error.AccessRefused,
+        404 => error.NotFound,
+        405 => error.ResourceLocked,
+        406 => error.PreconditionFailed,
+        501 => error.FrameError,
+        502 => error.SyntaxError,
+        503 => error.CommandInvalid,
+        505 => error.UnexpectedFrame,
+        506 => error.ResourceError,
+        530 => error.NotAllowed,
+        540 => error.NotImplemented,
+        541 => error.InternalError,
+        else => error.ChannelClosed,
+    };
+}
 
 /// A returned message (mandatory/immediate failure). Owns its storage, call `deinit` when done.
 pub const ReturnedMessage = struct {
@@ -233,6 +274,10 @@ pub const Channel = struct {
     // Channel event listeners
     event_listeners: events.EventListeners(ChannelEvent) = .{},
 
+    // Server-initiated close, set by the reader thread, surfaced via lastClose.
+    close_info_mutex: Mutex = .init,
+    last_close: ?ChannelCloseInfo = null,
+
     // Consumer work pool (optional, for dispatching callback consumers off the reader thread)
     work_pool: ?*ConsumerWorkPool = null,
 
@@ -272,6 +317,7 @@ pub const Channel = struct {
         self.promise_pool.deinit(self.allocator);
         self.consumer_callbacks.deinit();
         self.event_listeners.deinit(self.allocator);
+        if (self.last_close) |*info| info.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -308,10 +354,7 @@ pub const Channel = struct {
                     .consumer_count = ok.consumer_count,
                 };
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => error.ProtocolError,
         };
     }
@@ -431,10 +474,7 @@ pub const Channel = struct {
                     .arguments = arguments,
                 }) catch {};
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -449,10 +489,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .queue_unbind_ok => {},
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -463,10 +500,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         return switch (response) {
             .queue_purge_ok => |ok| ok.message_count,
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => error.ProtocolError,
         };
     }
@@ -485,10 +519,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         return switch (response) {
             .queue_delete_ok => |ok| ok.message_count,
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => error.ProtocolError,
         };
     }
@@ -521,10 +552,7 @@ pub const Channel = struct {
                     .arguments = opts.arguments,
                 }) catch {};
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -575,10 +603,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .exchange_delete_ok => {},
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -600,10 +625,7 @@ pub const Channel = struct {
                     .channel_id = self.id,
                 }) catch {};
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -618,10 +640,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .exchange_unbind_ok => {},
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -655,7 +674,7 @@ pub const Channel = struct {
                 while (self.outstanding_count >= self.outstanding_limit) {
                     if (!self.is_open.load(.acquire)) {
                         self.confirm_mutex.unlock(io);
-                        return error.ChannelClosed;
+                        return self.typedClosedError();
                     }
                     self.confirm_signal.waitUncancelable(io, &self.confirm_mutex);
                 }
@@ -728,7 +747,7 @@ pub const Channel = struct {
                 while (self.outstanding_count >= self.outstanding_limit) {
                     if (!self.is_open.load(.acquire)) {
                         self.confirm_mutex.unlock(io);
-                        return error.ChannelClosed;
+                        return self.typedClosedError();
                     }
                     self.confirm_signal.waitUncancelable(io, &self.confirm_mutex);
                 }
@@ -778,10 +797,7 @@ pub const Channel = struct {
                     }
                 }
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -811,10 +827,7 @@ pub const Channel = struct {
                 }) catch {};
                 break :blk ok.consumer_tag;
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => error.ProtocolError,
         };
     }
@@ -834,10 +847,7 @@ pub const Channel = struct {
             .basic_cancel_ok => {
                 _ = self.consumer_callbacks.remove(consumer_tag);
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -913,10 +923,7 @@ pub const Channel = struct {
                 };
             },
             .basic_get_empty => return null,
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -963,10 +970,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .basic_recover_ok => {},
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -1008,10 +1012,7 @@ pub const Channel = struct {
                     }
                 }
             },
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -1033,7 +1034,7 @@ pub const Channel = struct {
 
         const target = self.next_publish_seq_no;
         while (self.last_confirmed_seq < target) {
-            if (!self.is_open.load(.acquire)) return error.ChannelClosed;
+            if (!self.is_open.load(.acquire)) return self.typedClosedError();
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
             const remaining = limit - elapsed;
@@ -1057,10 +1058,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .tx_select_ok => {},
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -1071,10 +1069,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .tx_commit_ok => {},
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -1085,10 +1080,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .tx_rollback_ok => {},
-            .channel_close => |cc| {
-                try self.handleChannelClose(cc);
-                return error.ChannelClosed;
-            },
+            .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
@@ -1250,6 +1242,7 @@ pub const Channel = struct {
                 self.connection.sendMethod(self.id, .{ .channel_close_ok = {} }) catch {};
                 self.connection.removeChannel(self.id);
                 log.warn("channel {d} closed by server: [{d}] {s}", .{ self.id, cc.reply_code, cc.reply_text });
+                self.recordCloseInfo(cc, true);
                 // Post as RPC response so any waiting caller sees it
                 self.rpc_mutex.lockUncancelable(getIo());
                 self.rpc_response = m;
@@ -1406,7 +1399,7 @@ pub const Channel = struct {
         defer self.rpc_mutex.unlock(io);
 
         while (self.rpc_response == null) {
-            if (!self.is_open.load(.acquire)) return error.ChannelClosed;
+            if (!self.is_open.load(.acquire)) return self.typedClosedError();
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
             const remaining = limit - elapsed;
@@ -1438,7 +1431,7 @@ pub const Channel = struct {
         defer self.rpc_mutex.unlock(io);
 
         while (!self.get_ready) {
-            if (!self.is_open.load(.acquire)) return error.ChannelClosed;
+            if (!self.is_open.load(.acquire)) return self.typedClosedError();
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
             const remaining = limit - elapsed;
@@ -1457,7 +1450,44 @@ pub const Channel = struct {
     }
 
     /// Called by RPC waiters that received channel_close as their response.
-    /// The reader thread (handleMethod) already sent close-ok, emitted
-    /// the event, and called closeInternal, so this is a no-op.
-    fn handleChannelClose(_: *Channel, _: method_mod.ChannelClose) !void {}
+    /// The reader thread already sent close-ok, recorded the close info, emitted
+    /// the event, and called closeInternal. Map the reply code to a typed error.
+    fn handleChannelClose(_: *Channel, cc: method_mod.ChannelClose) ChannelError {
+        return replyCodeToError(cc.reply_code);
+    }
+
+    /// Record a server-initiated close so applications can inspect details
+    /// after a typed error returns. Replaces any prior recorded close.
+    fn recordCloseInfo(self: *Channel, cc: method_mod.ChannelClose, initiated_by_server: bool) void {
+        const text = self.allocator.dupe(u8, cc.reply_text) catch &[_]u8{};
+        const io = getIo();
+        self.close_info_mutex.lockUncancelable(io);
+        defer self.close_info_mutex.unlock(io);
+        if (self.last_close) |*prev| prev.deinit(self.allocator);
+        self.last_close = .{
+            .reply_code = cc.reply_code,
+            .reply_text = text,
+            .class_id = cc.class_id,
+            .method_id = cc.method_id,
+            .initiated_by_server = initiated_by_server,
+        };
+    }
+
+    /// Most recent server-initiated channel.close, or null. The struct's
+    /// scalars are copies; `reply_text` borrows from the channel and stays
+    /// valid for the channel's lifetime.
+    pub fn lastClose(self: *Channel) ?ChannelCloseInfo {
+        const io = getIo();
+        self.close_info_mutex.lockUncancelable(io);
+        defer self.close_info_mutex.unlock(io);
+        return self.last_close;
+    }
+
+    /// Map the most recent server close to a typed error, falling back to
+    /// `error.ChannelClosed` when the channel was closed by the application
+    /// itself or by the underlying transport.
+    fn typedClosedError(self: *Channel) ChannelError {
+        if (self.lastClose()) |info| return replyCodeToError(info.reply_code);
+        return error.ChannelClosed;
+    }
 };

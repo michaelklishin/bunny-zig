@@ -64,7 +64,7 @@ test "passive declare of a missing exchange closes the channel" {
     defer ch.closeChannel() catch {};
 
     const result = ch.exchangeDeclare("bunny-zig.test.no-such-exchange", "direct", .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
     try testing.expect(!ch.isOpen());
 }
 
@@ -86,7 +86,7 @@ test "exchangeDeclarePassive on a missing exchange closes the channel" {
     defer ch.closeChannel() catch {};
 
     const result = ch.exchangeDeclarePassive("bunny-zig.test.passive-helper-no-such-exchange");
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
     try testing.expect(!ch.isOpen());
 }
 
@@ -107,7 +107,7 @@ test "exchange.delete with if_unused=true fails when bindings exist" {
     // While the binding exists, exchange.delete with if_unused=true must
     // fail with PRECONDITION_FAILED (406), which closes the channel.
     const result = ch.exchangeDeleteWithOptions(ex, true);
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.PreconditionFailed, result);
 }
 
 test "exchange-to-exchange unbind stops routing across the binding" {

@@ -66,6 +66,39 @@ pub const ChannelError = error{
     EndOfStream,
     PublishNacked,
     BrokenPipe,
+    /// 311 CONTENT_TOO_LARGE: a basic.publish exceeded the broker's limit.
+    ContentTooLarge,
+    /// 313 NO_CONSUMERS: no consumers attached to a queue declared with the
+    /// immediate publish flag.
+    NoConsumers,
+    /// 320 CONNECTION_FORCED: the operator closed the connection.
+    ConnectionForced,
+    /// 402 INVALID_PATH: the requested vhost is not known to the broker.
+    InvalidPath,
+    /// 403 ACCESS_REFUSED: the user lacks permission for the operation.
+    AccessRefused,
+    /// 404 NOT_FOUND: a queue, exchange, or other entity is missing.
+    NotFound,
+    /// 405 RESOURCE_LOCKED: an exclusive resource is already in use.
+    ResourceLocked,
+    /// 406 PRECONDITION_FAILED: declare arguments mismatched, ack of unknown tag, etc.
+    PreconditionFailed,
+    /// 501 FRAME_ERROR: malformed AMQP frame.
+    FrameError,
+    /// 502 SYNTAX_ERROR: malformed method content.
+    SyntaxError,
+    /// 503 COMMAND_INVALID: a method is not valid in the current state.
+    CommandInvalid,
+    /// 505 UNEXPECTED_FRAME: a frame arrived out of the protocol order.
+    UnexpectedFrame,
+    /// 506 RESOURCE_ERROR: the broker hit a resource limit.
+    ResourceError,
+    /// 530 NOT_ALLOWED: the operation is forbidden by policy or configuration.
+    NotAllowed,
+    /// 540 NOT_IMPLEMENTED: the broker does not support the requested feature.
+    NotImplemented,
+    /// 541 INTERNAL_ERROR: the broker encountered an unexpected condition.
+    InternalError,
 } || Allocator.Error;
 
 pub const UriError = error{

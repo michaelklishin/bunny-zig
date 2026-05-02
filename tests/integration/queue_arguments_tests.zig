@@ -122,8 +122,7 @@ test "queue with x-expires auto-deletes after the timeout" {
 
     h.sleepMs(800);
 
-    // After the queue has expired, a passive redeclare must fail with a
-    // channel-level NOT_FOUND. The channel reports this as ChannelClosed.
+    // After the queue has expired, a passive redeclare fails with NOT_FOUND.
     const result = ch.queueDeclare(q, .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
 }

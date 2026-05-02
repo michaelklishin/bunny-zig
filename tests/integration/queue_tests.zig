@@ -110,7 +110,7 @@ test "passive declare of a missing queue closes the channel" {
     defer ch.closeChannel() catch {};
 
     const result = ch.queueDeclare("bunny-zig.test.passive-missing", .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
     try testing.expect(!ch.isOpen());
 }
 
@@ -136,7 +136,7 @@ test "queueDeclarePassive on a missing queue closes the channel" {
     defer ch.closeChannel() catch {};
 
     const result = ch.queueDeclarePassive("bunny-zig.test.passive-helper-missing");
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
     try testing.expect(!ch.isOpen());
 }
 
@@ -230,7 +230,7 @@ test "queueDeclarePassive: a user with no permission on the queue is refused (40
     defer ch.closeChannel() catch {};
 
     const result = ch.queueDeclarePassive(queue_name);
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.AccessRefused, result);
     try testing.expect(!ch.isOpen());
 }
 
@@ -248,7 +248,7 @@ test "redeclaring a queue with mismatched durable raises a precondition error" {
     const ch2 = try conn.openChannel();
     defer ch2.closeChannel() catch {};
     const result = ch2.queueDeclare(q, .{ .durable = false });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.PreconditionFailed, result);
     try testing.expect(!ch2.isOpen());
 
     // The failed declare causes a channel exception that closed ch2, so use

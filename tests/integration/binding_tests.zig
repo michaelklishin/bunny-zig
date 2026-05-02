@@ -54,10 +54,10 @@ test "auto-delete source exchange is removed when its last binding goes away" {
     try ch.exchangeBind(dst, src, "");
     try ch.exchangeUnbind(dst, src, "");
 
-    // Once the source's only binding is gone, the broker auto-deletes it.
-    // A passive declare against a missing exchange surfaces as a channel close.
+    // Once the source's only binding is gone, the broker auto-deletes it, so a
+    // passive declare reports NOT_FOUND.
     const ch2 = try conn.openChannel();
     defer ch2.closeChannel() catch {};
     const result = ch2.exchangeDeclare(src, bunny.ExchangeType.fanout, .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
 }

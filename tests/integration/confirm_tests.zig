@@ -74,10 +74,10 @@ test "publishing to a non-existent exchange closes the channel" {
     try ch.confirmSelect();
     try ch.publish("orphan", .{ .exchange = "bunny-zig.test.no-such-exchange", .routing_key = "k" });
 
-    // The error surfaces on the next synchronous RPC. waitForConfirms
-    // returns ChannelClosed once the broker tears the channel down.
+    // The broker tears the channel down with NOT_FOUND (404) and the next
+    // synchronous call surfaces it as a typed error.
     const result = ch.waitForConfirms();
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
     try testing.expect(!ch.isOpen());
     try testing.expect(conn.isOpen());
 }

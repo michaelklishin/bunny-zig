@@ -20,7 +20,7 @@ test "exclusive queue is locked from another connection" {
 
     // Touching an exclusive queue from another connection raises RESOURCE_LOCKED (405).
     const result = other_ch.basicConsume(q, "", .manual);
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.ResourceLocked, result);
     try testing.expect(!other_ch.isOpen());
     // The owning connection retains exclusive access.
     try testing.expect(owner_ch.isOpen());

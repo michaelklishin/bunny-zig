@@ -42,7 +42,7 @@ test "an error on one channel does not affect another channel" {
     defer ch2.closeChannel() catch {};
 
     const result = ch1.queueDeclare("bunny-zig.test.no-such-isolation", .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
     try testing.expect(!ch1.isOpen());
 
     // ch2 must remain fully usable.
@@ -71,7 +71,7 @@ test "channel-level error closes the channel but leaves connection open" {
     defer ch.closeChannel() catch {};
     // Passive declare of a non-existent queue is a NOT_FOUND channel-level error.
     const result = ch.queueDeclare("bunny-zig.test.no-such-queue", .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.NotFound, result);
     try testing.expect(!ch.isOpen());
     try testing.expect(conn.isOpen());
 

@@ -33,6 +33,17 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{ .root_module = unit_test_mod });
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
+    const tests_unit_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "bunny", .module = bunny_mod },
+        },
+    });
+    const tests_unit = b.addTest(.{ .root_module = tests_unit_mod });
+    const run_tests_unit = b.addRunArtifact(tests_unit);
+
     const integration_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/integration_test.zig"),
         .target = target,
@@ -47,6 +58,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+    test_step.dependOn(&run_tests_unit.step);
 
     const integration_test_step = b.step("integration-test", "Run integration tests (requires RabbitMQ)");
     integration_test_step.dependOn(&run_integration_tests.step);

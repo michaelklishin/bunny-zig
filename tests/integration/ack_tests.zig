@@ -92,7 +92,7 @@ test "basic.ack with an unknown delivery tag closes the channel" {
     try ch.basicAck(999_999, false);
 
     const result = ch.queueDeclare(q, .{ .passive = true });
-    try testing.expectError(error.ChannelClosed, result);
+    try testing.expectError(error.PreconditionFailed, result);
     try testing.expect(!ch.isOpen());
     // The connection itself is unaffected, so a fresh channel still works.
     try testing.expect(conn.isOpen());
