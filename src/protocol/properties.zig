@@ -385,6 +385,101 @@ test "properties: with headers roundtrip" {
     try std.testing.expectEqual(2, decoded.delivery_mode.?);
 }
 
+test "properties: all 14 fields including headers and cluster_id roundtrip" {
+    const allocator = std.testing.allocator;
+    const header_entries = [_]types.FieldTable.Entry{
+        .{ .key = "x-retry", .value = .{ .i32 = 3 } },
+        .{ .key = "x-flag", .value = .{ .boolean = true } },
+    };
+    var headers = try types.FieldTable.fromEntries(allocator, &header_entries);
+    defer headers.deinit();
+
+    const original = BasicProperties{
+        .content_type = "application/json",
+        .content_encoding = "utf-8",
+        .headers = headers,
+        .delivery_mode = 2,
+        .priority = 7,
+        .correlation_id = "corr-1",
+        .reply_to = "reply.q",
+        .expiration = "60000",
+        .message_id = "msg-1",
+        .timestamp = 1700000000,
+        .type = "order.created",
+        .user_id = "guest",
+        .app_id = "test-app",
+        .cluster_id = "cluster-a",
+    };
+
+    var buf: [1024]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    original.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const decoded = try BasicProperties.decode(&reader, allocator);
+    var decoded_headers = decoded.headers.?;
+    defer decoded_headers.deinit();
+
+    try std.testing.expectEqualSlices(u8, "application/json", decoded.content_type.?);
+    try std.testing.expectEqualSlices(u8, "utf-8", decoded.content_encoding.?);
+    try std.testing.expectEqual(2, decoded.delivery_mode.?);
+    try std.testing.expectEqual(7, decoded.priority.?);
+    try std.testing.expectEqualSlices(u8, "corr-1", decoded.correlation_id.?);
+    try std.testing.expectEqualSlices(u8, "reply.q", decoded.reply_to.?);
+    try std.testing.expectEqualSlices(u8, "60000", decoded.expiration.?);
+    try std.testing.expectEqualSlices(u8, "msg-1", decoded.message_id.?);
+    try std.testing.expectEqual(1700000000, decoded.timestamp.?);
+    try std.testing.expectEqualSlices(u8, "order.created", decoded.type.?);
+    try std.testing.expectEqualSlices(u8, "guest", decoded.user_id.?);
+    try std.testing.expectEqualSlices(u8, "test-app", decoded.app_id.?);
+    try std.testing.expectEqualSlices(u8, "cluster-a", decoded.cluster_id.?);
+    try std.testing.expectEqual(3, decoded_headers.get("x-retry").?.i32);
+    try std.testing.expect(decoded_headers.get("x-flag").?.boolean);
+}
+
+test "properties: headers with nested table and array roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const inner_entries = [_]types.FieldTable.Entry{
+        .{ .key = "score", .value = .{ .i32 = 99 } },
+    };
+    var inner = try types.FieldTable.fromEntries(allocator, &inner_entries);
+    defer inner.deinit();
+
+    const arr_items = [_]types.FieldValue{
+        .{ .long_string = "a" },
+        .{ .long_string = "b" },
+    };
+
+    const outer_entries = [_]types.FieldTable.Entry{
+        .{ .key = "nested-table", .value = .{ .table = inner } },
+        .{ .key = "nested-array", .value = .{ .array = &arr_items } },
+    };
+    var headers = try types.FieldTable.fromEntries(allocator, &outer_entries);
+    defer headers.deinit();
+
+    const original = BasicProperties.default.withHeaders(headers);
+
+    var buf: [1024]u8 = undefined;
+    var wb = WireBuffer.init(&buf);
+    original.encode(&wb);
+
+    var reader = WireReader.init(wb.getWritten());
+    const decoded = try BasicProperties.decode(&reader, allocator);
+    var decoded_headers = decoded.headers.?;
+    defer decoded_headers.deinit();
+
+    var nested_table = decoded_headers.get("nested-table").?.table;
+    defer nested_table.deinit();
+    try std.testing.expectEqual(99, nested_table.get("score").?.i32);
+
+    const nested_array = decoded_headers.get("nested-array").?.array;
+    defer allocator.free(nested_array);
+    try std.testing.expectEqual(2, nested_array.len);
+    try std.testing.expectEqualSlices(u8, "a", nested_array[0].long_string);
+    try std.testing.expectEqualSlices(u8, "b", nested_array[1].long_string);
+}
+
 test "fuzz: properties decode does not crash on arbitrary input" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {

@@ -177,6 +177,8 @@ pub const Connection = struct {
     negotiated_channel_max: u16 = 0,
     negotiated_frame_max: u32 = 0,
     negotiated_heartbeat: u16 = 0,
+    /// Server properties from connection.start: product, version, capabilities, cluster_name, etc.
+    /// Owns its storage; freed in `deinit`.
     server_properties: FieldTable = FieldTable.empty,
 
     // Channel management
@@ -211,6 +213,9 @@ pub const Connection = struct {
     // Topology tracking for recovery
     topology: recovery_mod.TopologyRegistry = undefined,
 
+    // PRNG for recovery backoff jitter. Only touched from the reader thread.
+    recovery_prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0),
+
     // Blocked state. blocked_reason is allocator-owned because the source slice
     // points into the transport's read buffer, which is reused on the next frame.
     blocked_mutex: Mutex = .init,
@@ -228,12 +233,15 @@ pub const Connection = struct {
         const conn = try allocator.create(Connection);
         errdefer allocator.destroy(conn);
 
+        const now_ns: i96 = Io.Clock.awake.now(getIo()).nanoseconds;
+        const seed: u64 = @bitCast(@as(i64, @truncate(now_ns)));
         conn.* = .{
             .allocator = allocator,
             .transport = transport,
             .options = options,
             .channels = std.AutoHashMap(u16, *Channel).init(allocator),
             .topology = recovery_mod.TopologyRegistry.init(allocator),
+            .recovery_prng = std.Random.DefaultPrng.init(seed),
         };
 
         try conn.performHandshake();
@@ -355,7 +363,11 @@ pub const Connection = struct {
             },
             else => return error.ProtocolError,
         };
-        self.server_properties = start.server_properties;
+        // Decoded keys and string values alias the read buffer; deep-copy to outlive it.
+        var borrowed_props = start.server_properties;
+        defer borrowed_props.deinit();
+        self.server_properties = try borrowed_props.deepCopy(self.allocator);
+        errdefer self.server_properties.deinitOwned(self.allocator);
 
         // Build client properties
         var props_list: std.ArrayList(FieldTable.Entry) = .empty;
@@ -515,7 +527,8 @@ pub const Connection = struct {
 
         var attempt: u32 = 0;
         while (config.max_attempts == null or attempt < config.max_attempts.?) {
-            const backoff_ms = recovery_mod.nextBackoff(attempt, config);
+            const base_ms = recovery_mod.nextBackoff(attempt, config);
+            const backoff_ms = recovery_mod.applyJitter(base_ms, config.jitter_fraction, self.recovery_prng.random());
             log.info("recovery attempt {d}, waiting {d}ms", .{ attempt + 1, backoff_ms });
             getIo().sleep(.{ .nanoseconds = @intCast(backoff_ms * std.time.ns_per_ms) }, .boot) catch {};
 
@@ -601,8 +614,12 @@ pub const Connection = struct {
                         .auto_delete = ex.auto_delete,
                         .internal = ex.internal,
                         .arguments = ex.arguments,
-                    } }) catch {};
-                    _ = self.transport.readFrame(self.allocator) catch {};
+                    } }) catch |err| {
+                        log.warn("recovery: failed to redeclare exchange '{s}': {}", .{ ex.name, err });
+                    };
+                    _ = self.transport.readFrame(self.allocator) catch |err| {
+                        log.warn("recovery: failed to read exchange.declare-ok for '{s}': {}", .{ ex.name, err });
+                    };
                 },
                 .queue => |q| {
                     if (q.exclusive) continue;
@@ -614,10 +631,15 @@ pub const Connection = struct {
                         .exclusive = false,
                         .auto_delete = q.auto_delete,
                         .arguments = q.arguments,
-                    } }) catch {};
+                    } }) catch |err| {
+                        log.warn("recovery: failed to redeclare queue '{s}': {}", .{ q.name, err });
+                    };
 
                     // Read queue.declare-ok to handle server-named queue renames
-                    const qframe = self.transport.readFrame(self.allocator) catch continue;
+                    const qframe = self.transport.readFrame(self.allocator) catch |err| {
+                        log.warn("recovery: failed to read queue.declare-ok for '{s}': {}", .{ q.name, err });
+                        continue;
+                    };
                     if (q.server_named) {
                         switch (qframe) {
                             .method => |mf| switch (mf.method) {
@@ -656,8 +678,12 @@ pub const Connection = struct {
                         .exchange = b.source,
                         .routing_key = b.routing_key,
                         .arguments = b.arguments,
-                    } }) catch {};
-                    _ = self.transport.readFrame(self.allocator) catch {};
+                    } }) catch |err| {
+                        log.warn("recovery: failed to rebind queue '{s}' to '{s}' (key '{s}'): {}", .{ dest, b.source, b.routing_key, err });
+                    };
+                    _ = self.transport.readFrame(self.allocator) catch |err| {
+                        log.warn("recovery: failed to read queue.bind-ok for '{s}'->'{s}': {}", .{ b.source, dest, err });
+                    };
                 },
                 .exchange_binding => |b| {
                     self.transport.sendMethod(b.channel_id, .{ .exchange_bind = .{
@@ -665,8 +691,12 @@ pub const Connection = struct {
                         .source = b.source,
                         .routing_key = b.routing_key,
                         .arguments = b.arguments,
-                    } }) catch {};
-                    _ = self.transport.readFrame(self.allocator) catch {};
+                    } }) catch |err| {
+                        log.warn("recovery: failed to rebind exchange '{s}'->'{s}' (key '{s}'): {}", .{ b.source, b.destination, b.routing_key, err });
+                    };
+                    _ = self.transport.readFrame(self.allocator) catch |err| {
+                        log.warn("recovery: failed to read exchange.bind-ok for '{s}'->'{s}': {}", .{ b.source, b.destination, err });
+                    };
                 },
                 .consumer => |c| {
                     const resolved_queue = self.topology.resolveQueueName(c.queue);
@@ -675,8 +705,12 @@ pub const Connection = struct {
                         .consumer_tag = c.consumer_tag,
                         .no_ack = c.no_ack,
                         .exclusive = c.exclusive,
-                    } }) catch {};
-                    _ = self.transport.readFrame(self.allocator) catch {};
+                    } }) catch |err| {
+                        log.warn("recovery: failed to recreate consumer '{s}' on '{s}': {}", .{ c.consumer_tag, resolved_queue, err });
+                    };
+                    _ = self.transport.readFrame(self.allocator) catch |err| {
+                        log.warn("recovery: failed to read basic.consume-ok for '{s}': {}", .{ c.consumer_tag, err });
+                    };
                 },
             }
         }
@@ -874,6 +908,7 @@ pub const Connection = struct {
 
         self.event_listeners.deinit(self.allocator);
         self.topology.deinit(self.allocator);
+        self.server_properties.deinitOwned(self.allocator);
         if (self.blocked_reason) |r| self.allocator.free(r);
         self.allocator.destroy(self);
     }

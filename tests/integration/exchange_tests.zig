@@ -68,6 +68,28 @@ test "passive declare of a missing exchange closes the channel" {
     try testing.expect(!ch.isOpen());
 }
 
+test "exchangeDeclarePassive convenience helper asserts a built-in exchange" {
+    const _t = h.TestTimer.start("exchangeDeclarePassive convenience helper asserts a built-in exchange"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    try ch.exchangeDeclarePassive("amq.fanout");
+}
+
+test "exchangeDeclarePassive on a missing exchange closes the channel" {
+    const _t = h.TestTimer.start("exchangeDeclarePassive on a missing exchange closes the channel"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const result = ch.exchangeDeclarePassive("bunny-zig.test.passive-helper-no-such-exchange");
+    try testing.expectError(error.ChannelClosed, result);
+    try testing.expect(!ch.isOpen());
+}
+
 test "exchange.delete with if_unused=true fails when bindings exist" {
     const _t = h.TestTimer.start("exchange.delete with if_unused=true fails when bindings exist"); defer _t.stop();
     const conn = try h.openTestConnection();

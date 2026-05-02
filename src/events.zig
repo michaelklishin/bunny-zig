@@ -24,6 +24,9 @@ pub const ChannelEvent = union(enum) {
 };
 
 /// A thread-safe list of event listeners.
+/// Listeners run synchronously on the reader thread, so they must be infallible
+/// (no panics) and return quickly. Defer heavy work to the application's own
+/// thread pool.
 pub fn EventListeners(comptime EventType: type) type {
     const std = @import("std");
     const Allocator = std.mem.Allocator;

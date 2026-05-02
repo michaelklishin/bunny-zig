@@ -1,10 +1,26 @@
-/// Thread pool for dispatching consumer deliveries off the reader thread.
+/// Per-channel thread pool for dispatching consumer deliveries off the reader
+/// thread, similar in spirit to Ruby Bunny's `ConsumerWorkPool` and analogous
+/// to one per-channel queue inside Java's `ConsumerWorkService`. The reader
+/// thread submits deliveries; workers invoke the user handler.
+///
+/// Ordering: with `pool_size = 1` (the default for predictable behavior),
+/// per-channel FIFO is preserved, matching the AMQP per-consumer-tag ordering
+/// guarantee. With `pool_size > 1`, consecutive deliveries for the same
+/// consumer-tag may execute concurrently on different workers; ordering is no
+/// longer guaranteed and handlers must be safe to run in parallel.
+///
+/// Backpressure: the queue is unbounded. If the allocator fails to grow it,
+/// the delivery is freed and a warning is logged. To prevent unbounded
+/// memory growth from slow handlers, set `basic.qos(prefetch_count, ...)` to
+/// cap the broker's in-flight window.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Thread = std.Thread;
 const Io = std.Io;
 const Mutex = Io.Mutex;
 const Condition = Io.Condition;
+
+const log = std.log.scoped(.bunny_consumer_pool);
 
 const channel_mod = @import("channel.zig");
 const Delivery = channel_mod.Delivery;
@@ -61,9 +77,10 @@ pub const ConsumerWorkPool = struct {
     pub fn submit(self: *ConsumerWorkPool, handler: *const fn (Delivery) void, delivery: Delivery) void {
         const io = getIo();
         self.mutex.lockUncancelable(io);
-        self.queue.pushBack(self.allocator, .{ .handler = handler, .delivery = delivery }) catch {
+        self.queue.pushBack(self.allocator, .{ .handler = handler, .delivery = delivery }) catch |err| {
             self.mutex.unlock(io);
-            // Drop the delivery on backpressure rather than leak it.
+            // Drop the delivery on enqueue failure (typically OOM) rather than leak it.
+            log.warn("dropping delivery: failed to enqueue: {}", .{err});
             var d = delivery;
             d.deinit(self.allocator);
             return;

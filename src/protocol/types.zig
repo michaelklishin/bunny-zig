@@ -20,7 +20,6 @@ pub const FieldValue = union(enum) {
     f32: f32,
     f64: f64,
     decimal: Decimal,
-    short_string: []const u8,
     long_string: []const u8,
     timestamp: u64,
     table: FieldTable,
@@ -81,10 +80,6 @@ pub const FieldValue = union(enum) {
                 wb.writeByte(v.scale);
                 wb.writeU32(v.value);
             },
-            .short_string => |v| {
-                wb.writeByte('S');
-                wb.writeLongString(v);
-            },
             .long_string => |v| {
                 wb.writeByte('S');
                 wb.writeLongString(v);
@@ -122,7 +117,6 @@ pub const FieldValue = union(enum) {
     /// Deep-copy: result owns all allocations independently of the source.
     pub fn deepCopy(self: FieldValue, allocator: Allocator) Allocator.Error!FieldValue {
         return switch (self) {
-            .short_string => |s| .{ .short_string = try allocator.dupe(u8, s) },
             .long_string => |s| .{ .long_string = try allocator.dupe(u8, s) },
             .byte_array => |b| .{ .byte_array = try allocator.dupe(u8, b) },
             .table => |t| .{ .table = try t.deepCopy(allocator) },
@@ -143,7 +137,7 @@ pub const FieldValue = union(enum) {
     /// Free what `deepCopy` allocated. No-op for inline scalars.
     pub fn deinitOwned(self: *FieldValue, allocator: Allocator) void {
         switch (self.*) {
-            .short_string, .long_string, .byte_array => |s| allocator.free(s),
+            .long_string, .byte_array => |s| allocator.free(s),
             .table => |*t| t.deinitOwned(allocator),
             .array => |items| {
                 for (items) |item| {
@@ -357,6 +351,9 @@ pub const FieldTable = struct {
     }
 
     /// Decode a field table from raw bytes at a given nesting depth.
+    /// The result borrows keys and string values from `data`; only the
+    /// `entries` slice is allocator-owned. Call `deinit` when finished, or
+    /// `deepCopy` followed by `deinitOwned` if the table must outlive `data`.
     pub fn decodeRaw(data: []const u8, allocator: Allocator, depth: u8) DecodeError!TableDecodeResult {
         if (depth > max_table_nesting) return error.TableNestingTooDeep;
         if (data.len < 4) return error.InsufficientData;

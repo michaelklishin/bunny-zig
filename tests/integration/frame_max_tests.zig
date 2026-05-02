@@ -66,3 +66,53 @@ test "frame_max: client value below the protocol minimum (4096) is rejected" {
     });
     try testing.expectError(error.FrameMaxTooSmall, result);
 }
+
+// AMQP frame overhead is 8 bytes (1 type + 2 channel + 4 size + 1 frame-end),
+// so body content per body frame is `frame_max - 8`. These tests exercise body
+// sizes around that boundary, where a single byte change flips the body across
+// one extra frame.
+test "frame_max: body sizes at and around the per-frame boundary roundtrip" {
+    const _t = h.TestTimer.start("frame_max: body sizes at and around the per-frame boundary roundtrip");
+    defer _t.stop();
+    const conn = try bunny.Connection.open(h.test_allocator, .{
+        .host = h.testHost(),
+        .port = h.testPort(),
+        .frame_max = 8192,
+        .recovery = .{ .enabled = false },
+    });
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const q = "bunny-zig.test.frame-max-boundary";
+    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+
+    const per_frame: usize = @as(usize, conn.negotiated_frame_max) - 8;
+    const sizes = [_]usize{
+        0,
+        1,
+        per_frame - 1,
+        per_frame,
+        per_frame + 1,
+        2 * per_frame,
+        2 * per_frame + 1,
+    };
+
+    var body = try h.test_allocator.alloc(u8, 2 * per_frame + 1);
+    defer h.test_allocator.free(body);
+    for (body, 0..) |*b, i| b.* = @intCast(i & 0xFF);
+
+    try ch.confirmSelect();
+    for (sizes) |size| {
+        try ch.publishToQueue(q, body[0..size], .{});
+        _ = try ch.waitForConfirms();
+
+        const got = try h.pollBasicGet(ch, q);
+        try testing.expect(got != null);
+        var msg = got.?;
+        defer msg.deinit(h.test_allocator);
+        try testing.expectEqual(size, msg.body.len);
+        try testing.expectEqualSlices(u8, body[0..size], msg.body);
+        try ch.basicAck(msg.delivery_tag, false);
+    }
+}

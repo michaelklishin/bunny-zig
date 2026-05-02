@@ -1,6 +1,15 @@
 const std = @import("std");
+const bunny = @import("bunny");
 const h = @import("test_helpers.zig");
 const testing = h.testing;
+
+fn cleanupQueue(queue_name: []const u8) void {
+    const conn = h.openTestConnection() catch return;
+    defer conn.deinit();
+    const ch = conn.openChannel() catch return;
+    defer ch.closeChannel() catch {};
+    _ = ch.queueDelete(queue_name) catch {};
+}
 
 test "declare and delete a queue" {
     const _t = h.TestTimer.start("declare and delete a queue"); defer _t.stop();
@@ -101,6 +110,126 @@ test "passive declare of a missing queue closes the channel" {
     defer ch.closeChannel() catch {};
 
     const result = ch.queueDeclare("bunny-zig.test.passive-missing", .{ .passive = true });
+    try testing.expectError(error.ChannelClosed, result);
+    try testing.expect(!ch.isOpen());
+}
+
+test "queueDeclarePassive convenience helper asserts existence" {
+    const _t = h.TestTimer.start("queueDeclarePassive convenience helper asserts existence"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const q = "bunny-zig.test.passive-helper";
+    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+
+    const info = try ch.queueDeclarePassive(q);
+    try testing.expectEqualSlices(u8, q, info.name);
+}
+
+test "queueDeclarePassive on a missing queue closes the channel" {
+    const _t = h.TestTimer.start("queueDeclarePassive on a missing queue closes the channel"); defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const result = ch.queueDeclarePassive("bunny-zig.test.passive-helper-missing");
+    try testing.expectError(error.ChannelClosed, result);
+    try testing.expect(!ch.isOpen());
+}
+
+// As of RabbitMQ 4.3.0, passive declares require a permission check (`configure`)
+// on the target resource; 4.3.1 relaxed this to accept any permission. To keep
+// the test compatible with both, we grant `configure` here. RabbitMQ's own test
+// suite covers the looser permission cases.
+// 4.3.0 release notes: ../main.git/release-notes/4.3.0.md
+// 4.3.0 issue: https://github.com/rabbitmq/rabbitmq-server/pull/16085
+// 4.3.1 relaxation PR: https://github.com/rabbitmq/rabbitmq-server/pull/16272
+test "queueDeclarePassive: succeeds for a user with configure permission" {
+    const _t = h.TestTimer.start("queueDeclarePassive: succeeds for a user with configure permission");
+    defer _t.stop();
+
+    if (!h.runRabbitmqctl(&.{"status"})) return error.SkipZigTest;
+
+    const username = "bunny-zig.passive-configure";
+    const password = "passive-configure-pw";
+    const queue_name = "bunny-zig.test.passive-configure-q";
+
+    {
+        const setup_conn = try h.openTestConnection();
+        defer setup_conn.deinit();
+        const setup_ch = try setup_conn.openChannel();
+        defer setup_ch.closeChannel() catch {};
+        _ = try setup_ch.queueDeclare(queue_name, .{ .durable = true });
+    }
+    defer cleanupQueue(queue_name);
+
+    _ = h.runRabbitmqctl(&.{ "delete_user", username });
+    if (!h.runRabbitmqctl(&.{ "add_user", username, password })) return error.SkipZigTest;
+    defer _ = h.runRabbitmqctl(&.{ "delete_user", username });
+    // Grant configure-only on the default vhost: any permission, including
+    // configure, satisfies passive declare on RabbitMQ 4.3.0+.
+    if (!h.runRabbitmqctl(&.{ "set_permissions", "-p", "/", username, ".*", "^$", "^$" })) {
+        return error.SkipZigTest;
+    }
+
+    const conn = try bunny.Connection.open(h.test_allocator, .{
+        .host = h.testHost(),
+        .port = h.testPort(),
+        .username = username,
+        .password = password,
+        .recovery = .{ .enabled = false },
+    });
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const info = try ch.queueDeclarePassive(queue_name);
+    try testing.expectEqualSlices(u8, queue_name, info.name);
+}
+
+test "queueDeclarePassive: a user with no permission on the queue is refused (403)" {
+    const _t = h.TestTimer.start("queueDeclarePassive: a user with no permission on the queue is refused (403)");
+    defer _t.stop();
+
+    if (!h.runRabbitmqctl(&.{"status"})) return error.SkipZigTest;
+
+    const username = "bunny-zig.passive-nopermission";
+    const password = "passive-nopermission-pw";
+    const queue_name = "bunny-zig.test.passive-nopermission-q";
+
+    {
+        const setup_conn = try h.openTestConnection();
+        defer setup_conn.deinit();
+        const setup_ch = try setup_conn.openChannel();
+        defer setup_ch.closeChannel() catch {};
+        _ = try setup_ch.queueDeclare(queue_name, .{ .durable = true });
+    }
+    defer cleanupQueue(queue_name);
+
+    _ = h.runRabbitmqctl(&.{ "delete_user", username });
+    if (!h.runRabbitmqctl(&.{ "add_user", username, password })) return error.SkipZigTest;
+    defer _ = h.runRabbitmqctl(&.{ "delete_user", username });
+    // Empty patterns on every kind: the user can connect but holds no permission
+    // on any resource in vhost "/".
+    if (!h.runRabbitmqctl(&.{ "set_permissions", "-p", "/", username, "^$", "^$", "^$" })) {
+        return error.SkipZigTest;
+    }
+
+    const conn = try bunny.Connection.open(h.test_allocator, .{
+        .host = h.testHost(),
+        .port = h.testPort(),
+        .username = username,
+        .password = password,
+        .recovery = .{ .enabled = false },
+    });
+    defer conn.deinit();
+    const ch = try conn.openChannel();
+    defer ch.closeChannel() catch {};
+
+    const result = ch.queueDeclarePassive(queue_name);
     try testing.expectError(error.ChannelClosed, result);
     try testing.expect(!ch.isOpen());
 }

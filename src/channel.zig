@@ -332,6 +332,12 @@ pub const Channel = struct {
         return self.queueDeclare(name, QueueDeclareOptions.durableQueue());
     }
 
+    /// Assert a queue exists without modifying it. Closes the channel with
+    /// NOT_FOUND (404) if the queue is missing.
+    pub fn queueDeclarePassive(self: *Channel, name: []const u8) !QueueInfo {
+        return self.queueDeclare(name, .{ .passive = true });
+    }
+
     /// Declare a quorum queue.
     pub fn quorumQueue(self: *Channel, name: []const u8) !QueueInfo {
         const entries = [_]FieldTable.Entry{
@@ -541,6 +547,13 @@ pub const Channel = struct {
     /// Declare a headers exchange.
     pub fn declareHeaders(self: *Channel, name: []const u8) !void {
         return self.exchangeDeclare(name, ExchangeType.headers, ExchangeDeclareOptions.durableExchange());
+    }
+
+    /// Assert an exchange exists without modifying it. Closes the channel with
+    /// NOT_FOUND (404) if the exchange is missing. The exchange_type argument is
+    /// sent for protocol completeness but is ignored by the broker for passive declares.
+    pub fn exchangeDeclarePassive(self: *Channel, name: []const u8) !void {
+        return self.exchangeDeclare(name, ExchangeType.direct, .{ .passive = true });
     }
 
     /// Declare an exchange and return a handle for convenient operations.
@@ -1167,7 +1180,13 @@ pub const Channel = struct {
         }
 
         if (self.confirm_tracking and self.outstanding_limit > 0) {
-            self.outstanding_count -|= resolved_count;
+            // Saturating subtract would silently mask a tracking bug; log and clamp.
+            if (resolved_count > self.outstanding_count) {
+                log.err("confirm tracking inconsistency on channel {d}: resolved {d} promises but only {d} outstanding", .{ self.id, resolved_count, self.outstanding_count });
+                self.outstanding_count = 0;
+            } else {
+                self.outstanding_count -= resolved_count;
+            }
         }
 
         // Wake backpressure waiters and batch waitForConfirms waiters
