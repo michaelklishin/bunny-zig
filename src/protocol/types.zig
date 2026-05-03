@@ -7,7 +7,7 @@ const WireBuffer = @import("wire.zig").WireBuffer;
 
 pub const max_table_nesting: u8 = 16;
 
-/// An AMQP field value with type tag.
+/// An AMQP 0-9-1 field value with type tag.
 pub const FieldValue = union(enum) {
     boolean: bool,
     i8: i8,
@@ -267,7 +267,7 @@ pub const TableDecodeResult = struct {
     consumed: usize,
 };
 
-/// An AMQP field table: a map of string keys to field values.
+/// An AMQP 0-9-1 field table: a map of string keys to field values.
 pub const FieldTable = struct {
     entries: []Entry,
     allocator: Allocator,

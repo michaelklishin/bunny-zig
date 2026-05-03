@@ -1,18 +1,11 @@
-/// Per-channel thread pool for dispatching consumer deliveries off the reader
-/// thread, similar in spirit to Ruby Bunny's `ConsumerWorkPool` and analogous
-/// to one per-channel queue inside Java's `ConsumerWorkService`. The reader
-/// thread submits deliveries; workers invoke the user handler.
+/// Per-channel thread pool that dispatches consumer deliveries off the reader thread.
 ///
-/// Ordering: with `pool_size = 1` (the default for predictable behavior),
-/// per-channel FIFO is preserved, matching the AMQP per-consumer-tag ordering
-/// guarantee. With `pool_size > 1`, consecutive deliveries for the same
-/// consumer-tag may execute concurrently on different workers; ordering is no
-/// longer guaranteed and handlers must be safe to run in parallel.
+/// With `pool_size = 1` (the default), per-channel FIFO is preserved, matching
+/// the AMQP 0-9-1 per-consumer-tag ordering guarantee. Larger pools may run
+/// deliveries for the same tag concurrently.
 ///
-/// Backpressure: the queue is unbounded. If the allocator fails to grow it,
-/// the delivery is freed and a warning is logged. To prevent unbounded
-/// memory growth from slow handlers, set `basic.qos(prefetch_count, ...)` to
-/// cap the broker's in-flight window.
+/// The queue is unbounded; cap broker-side flow with `basic.qos`. On enqueue
+/// failure the delivery is dropped and logged.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Thread = std.Thread;

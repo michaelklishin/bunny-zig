@@ -1,4 +1,4 @@
-/// TCP and TLS transport for AMQP connections.
+/// TCP and TLS transport for AMQP 0-9-1 connections.
 const std = @import("std");
 const Io = std.Io;
 const net = Io.net;
@@ -51,7 +51,7 @@ pub const TlsOptions = struct {
     insecure: bool = false,
 };
 
-/// Low-level transport for sending and receiving AMQP frames over TCP or TLS.
+/// Low-level transport for sending and receiving AMQP 0-9-1 frames over TCP or TLS.
 pub const Transport = struct {
     stream: net.Stream,
     tls_conn: ?tls.Connection = null,
@@ -68,6 +68,7 @@ pub const Transport = struct {
     read_start: usize = 0,
     read_end: usize = 0,
     allocator: std.mem.Allocator,
+    closed: bool = false,
 
     pub fn connect(allocator: std.mem.Allocator, host: []const u8, port: u16, timeout: std.Io.Timeout) !Transport {
         const io = getIo();
@@ -164,6 +165,8 @@ pub const Transport = struct {
     }
 
     pub fn close(self: *Transport) void {
+        if (self.closed) return;
+        self.closed = true;
         if (self.tls_conn) |*tc| {
             tc.close() catch {};
         }
@@ -202,7 +205,6 @@ pub const Transport = struct {
         return null;
     }
 
-    /// Send the AMQP protocol header.
     pub fn sendProtocolHeader(self: *Transport) !void {
         try self.writeAll(constants.protocol_header);
     }

@@ -1,7 +1,7 @@
 /// Low-level wire format encoding/decoding helpers.
 const std = @import("std");
 
-/// A buffer for encoding AMQP wire data.
+/// A buffer for encoding AMQP 0-9-1 wire data.
 pub const WireBuffer = struct {
     buf: []u8,
     offset: usize = 0,
@@ -72,11 +72,14 @@ pub const WireBuffer = struct {
         self.writeU64(@bitCast(v));
     }
 
-    /// Write a short string (max 255 bytes): u8 length prefix.
+    /// Short string with u8 length prefix. AMQP 0-9-1 caps these at 255 bytes;
+    /// truncate explicitly so a release build cannot overflow when the debug
+    /// assert is stripped. Validate at the API boundary for a meaningful name.
     pub fn writeShortString(self: *WireBuffer, s: []const u8) void {
         std.debug.assert(s.len <= 255);
-        self.writeByte(@intCast(s.len));
-        self.writeBytes(s);
+        const len: u8 = if (s.len > 255) 255 else @intCast(s.len);
+        self.writeByte(len);
+        self.writeBytes(s[0..len]);
     }
 
     /// Write a long string: u32 length prefix.
@@ -96,7 +99,7 @@ pub const WireBuffer = struct {
     }
 };
 
-/// A reader for decoding AMQP wire data.
+/// A reader for decoding AMQP 0-9-1 wire data.
 pub const WireReader = struct {
     data: []const u8,
     offset: usize = 0,

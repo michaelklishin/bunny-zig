@@ -1626,3 +1626,17 @@ test "basic_deliver decode" {
     try std.testing.expectEqualSlices(u8, "amq.direct", decoded.exchange);
     try std.testing.expectEqualSlices(u8, "test.key", decoded.routing_key);
 }
+
+test "fuzz: Method.decode does not crash on arbitrary input" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var buf: [256]u8 = undefined;
+            const len = smith.sliceWithHash(&buf, 0);
+            if (len < 4) return;
+            const class_id = std.mem.readInt(u16, buf[0..2], .big);
+            const method_id = std.mem.readInt(u16, buf[2..4], .big);
+            var reader = WireReader.init(buf[4..len]);
+            _ = Method.decode(class_id, method_id, &reader, std.testing.allocator) catch return;
+        }
+    }.f, .{});
+}

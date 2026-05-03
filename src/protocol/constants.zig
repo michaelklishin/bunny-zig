@@ -111,7 +111,7 @@ pub const method_tx_commit_ok: u16 = 21;
 pub const method_tx_rollback: u16 = 30;
 pub const method_tx_rollback_ok: u16 = 31;
 
-// AMQP reply codes
+// AMQP 0-9-1 reply codes
 pub const ReplyCode = enum(u16) {
     success = 200,
     // Soft errors (channel-level)

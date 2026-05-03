@@ -55,6 +55,18 @@ test "frame_max: a body larger than frame_max is split across multiple body fram
     try ch.basicAck(msg.delivery_tag, false);
 }
 
+test "frame_max: client value above the client buffer cap is rejected" {
+    const _t = h.TestTimer.start("frame_max: client value above the client buffer cap is rejected");
+    defer _t.stop();
+    const result = bunny.Connection.open(h.test_allocator, .{
+        .host = h.testHost(),
+        .port = h.testPort(),
+        .frame_max = 1_000_000,
+        .recovery = .{ .enabled = false },
+    });
+    try testing.expectError(error.FrameMaxTooLarge, result);
+}
+
 test "frame_max: client value below the protocol minimum (4096) is rejected" {
     const _t = h.TestTimer.start("frame_max: client value below the protocol minimum (4096) is rejected");
     defer _t.stop();
@@ -67,10 +79,8 @@ test "frame_max: client value below the protocol minimum (4096) is rejected" {
     try testing.expectError(error.FrameMaxTooSmall, result);
 }
 
-// AMQP frame overhead is 8 bytes (1 type + 2 channel + 4 size + 1 frame-end),
-// so body content per body frame is `frame_max - 8`. These tests exercise body
-// sizes around that boundary, where a single byte change flips the body across
-// one extra frame.
+// AMQP 0-9-1 frame overhead is 8 bytes (1 type + 2 channel + 4 size + 1 frame-end),
+// so body content per body frame is `frame_max - 8`.
 test "frame_max: body sizes at and around the per-frame boundary roundtrip" {
     const _t = h.TestTimer.start("frame_max: body sizes at and around the per-frame boundary roundtrip");
     defer _t.stop();

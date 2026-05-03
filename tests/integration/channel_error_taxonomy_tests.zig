@@ -3,8 +3,8 @@ const bunny = @import("bunny");
 const h = @import("test_helpers.zig");
 const testing = h.testing;
 
-// Each AMQP reply code surfaces as a distinct typed error from the API call,
-// and the channel exposes the reply text and offending method via lastClose.
+// Each AMQP 0-9-1 reply code surfaces as a distinct typed error from the API
+// call, and the channel exposes the reply text and offending method via lastClose.
 
 test "channel error taxonomy: NOT_FOUND (404) on passive declare of a missing queue" {
     const _t = h.TestTimer.start("channel error taxonomy: NOT_FOUND (404) on passive declare of a missing queue");

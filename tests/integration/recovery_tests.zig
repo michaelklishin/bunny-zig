@@ -341,3 +341,49 @@ test "recovery: combined path, server-named queue plus consumer post-recovery de
 
     _ = ch.queueDelete(new_name) catch {};
 }
+
+// Recovery exhausts after `max_attempts` and emits a `recovery_failed` event.
+// Forcing the failure is awkward, point the recovery loop at an unreachable
+// host so each attempt fails immediately.
+test "recovery: emits recovery_failed after max_attempts is exhausted" {
+    const _t = h.TestTimer.start("recovery: emits recovery_failed after max_attempts is exhausted");
+    defer _t.stop();
+
+    const Captured = struct {
+        var failed_count: std.atomic.Value(u32) = .init(0);
+        fn handler(event: bunny.ConnectionEvent) void {
+            switch (event) {
+                .recovery_failed => _ = failed_count.fetchAdd(1, .release),
+                else => {},
+            }
+        }
+    };
+    Captured.failed_count.store(0, .release);
+
+    const conn_name = "bunny-zig.test.recovery-max-attempts";
+    const conn = try bunny.Connection.open(h.test_allocator, .{
+        .host = h.testHost(),
+        .port = h.testPort(),
+        .connection_name = conn_name,
+        .recovery = .{
+            .enabled = true,
+            .initial_interval_ms = 50,
+            .max_interval_ms = 100,
+            .max_attempts = 2,
+        },
+    });
+    defer conn.deinit();
+    try conn.event_listeners.add(h.test_allocator, &Captured.handler);
+
+    // Swap to a port nothing is listening on so each retry fails fast.
+    conn.options.port = 1;
+
+    var http_client = try h.openHttpApiClient();
+    defer http_client.deinit();
+    h.forceCloseConnection(&http_client, conn_name);
+
+    var attempts: u32 = 0;
+    while (Captured.failed_count.load(.acquire) == 0 and attempts < 200) : (attempts += 1) h.sleepMs(25);
+    try testing.expect(Captured.failed_count.load(.acquire) >= 1);
+    try testing.expect(!conn.isOpen());
+}

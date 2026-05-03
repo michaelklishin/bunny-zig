@@ -10,7 +10,7 @@ const WireBuffer = @import("wire.zig").WireBuffer;
 const WireReader = @import("wire.zig").WireReader;
 const types = @import("types.zig");
 
-/// A decoded AMQP frame.
+/// A decoded AMQP 0-9-1 frame.
 pub const Frame = union(FrameType) {
     method: MethodFrame,
     header: HeaderFrame,
@@ -107,7 +107,9 @@ pub fn decodeFrame(data: []const u8, allocator: Allocator) !?struct { frame: Fra
     const frame_type = data[0];
     const channel_id = types.readU16(data[1..]);
     const payload_size = types.readU32(data[3..]);
-    const total_size = c.frame_overhead + payload_size;
+    // Use a checked add: on a 32-bit target the sum would otherwise wrap.
+    const total_size = std.math.add(usize, c.frame_overhead, payload_size) catch
+        return error.InvalidFrameEnd;
 
     if (data.len < total_size) return null;
 

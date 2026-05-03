@@ -337,11 +337,14 @@ pub fn nextBackoff(attempt: u32, config: RecoveryConfig) u64 {
 }
 
 /// Apply additive jitter on top of a base backoff. The result is in
-/// [base_ms, base_ms * (1 + jitter_fraction)].
+/// [base_ms, base_ms * (1 + jitter_fraction)]. Clamps `jitter_fraction` to
+/// [0, 1] so a misconfigured value cannot multiply the backoff arbitrarily.
 pub fn applyJitter(base_ms: u64, jitter_fraction: f64, random: std.Random) u64 {
-    if (jitter_fraction <= 0.0 or base_ms == 0) return base_ms;
+    if (base_ms == 0) return 0;
+    const f = std.math.clamp(jitter_fraction, 0.0, 1.0);
+    if (f == 0.0) return base_ms;
     const base: f64 = @floatFromInt(base_ms);
-    const extra = base * jitter_fraction * random.float(f64);
+    const extra = base * f * random.float(f64);
     return base_ms + @as(u64, @intFromFloat(extra));
 }
 

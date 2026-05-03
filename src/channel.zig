@@ -115,13 +115,15 @@ pub const ChannelCloseInfo = struct {
     initiated_by_server: bool,
 
     pub fn deinit(self: *ChannelCloseInfo, allocator: std.mem.Allocator) void {
-        allocator.free(self.reply_text);
+        // reply_text is a sentinel empty slice when the dupe at record time failed,
+        // and that slice does not belong to `allocator`. Skip the free in that case.
+        if (self.reply_text.len > 0) allocator.free(self.reply_text);
         self.* = undefined;
     }
 };
 
-/// Map an AMQP reply code to a typed error. Codes outside the AMQP set, and
-/// the success code 200, fall back to `error.ChannelClosed`.
+/// Map an AMQP 0-9-1 reply code to a typed error. Codes outside the spec set,
+/// and the success code 200, fall back to `error.ChannelClosed`.
 pub fn replyCodeToError(reply_code: u16) ChannelError {
     return switch (reply_code) {
         311 => error.ContentTooLarge,
@@ -235,7 +237,7 @@ pub const PublishOptions = struct {
     flush: FlushStrategy = .flush_immediately,
 };
 
-/// An AMQP channel. All queue, exchange, publish, and consume operations happen on a channel.
+/// An AMQP 0-9-1 channel. All queue, exchange, publish, and consume operations happen on a channel.
 pub const Channel = struct {
     allocator: Allocator,
     connection: *Connection,
@@ -1149,6 +1151,32 @@ pub const Channel = struct {
         self.confirm_mutex.unlock(io);
     }
 
+    /// Walk the in-flight map once and resolve any seq in [start, delivery_tag].
+    /// Iteration cannot mutate the map, so collect keys first then remove. The
+    /// stack batch sized at 128 covers virtually all real workloads in one pass.
+    fn resolveSparseConfirms(self: *Channel, start: u64, delivery_tag: u64, result: ConfirmPromise.ConfirmResult, io: Io) u32 {
+        var resolved_count: u32 = 0;
+        var batch: [128]u64 = undefined;
+        while (true) {
+            var batch_pos: usize = 0;
+            var it = self.confirm_promises.iterator();
+            while (it.next()) |entry| {
+                const seq = entry.key_ptr.*;
+                if (seq >= start and seq <= delivery_tag) {
+                    entry.value_ptr.*.result = result;
+                    entry.value_ptr.*.event.set(io);
+                    batch[batch_pos] = seq;
+                    batch_pos += 1;
+                    if (batch_pos == batch.len) break;
+                }
+            }
+            for (batch[0..batch_pos]) |k| _ = self.confirm_promises.remove(k);
+            resolved_count += @intCast(batch_pos);
+            if (batch_pos < batch.len) break;
+        }
+        return resolved_count;
+    }
+
     /// Process a publisher confirm from the server.
     fn handleConfirm(self: *Channel, delivery_tag: u64, multiple: bool, ack: bool) void {
         const io = getIo();
@@ -1159,15 +1187,36 @@ pub const Channel = struct {
             self.last_confirmed_seq = delivery_tag;
         }
 
-        // Resolve individual promises
         const start = if (multiple) prev_confirmed + 1 else delivery_tag;
-        var seq = start;
+        const result: ConfirmPromise.ConfirmResult = if (ack) .acked else .nacked;
         var resolved_count: u32 = 0;
-        while (seq <= delivery_tag) : (seq += 1) {
-            if (self.confirm_promises.fetchRemove(seq)) |kv| {
-                kv.value.result = if (ack) .acked else .nacked;
+
+        if (!multiple) {
+            if (self.confirm_promises.fetchRemove(delivery_tag)) |kv| {
+                kv.value.result = result;
                 kv.value.event.set(io);
-                resolved_count += 1;
+                resolved_count = 1;
+            }
+        } else {
+            // Two strategies: walk the seq range, or walk the (smaller) map and
+            // filter. Pick the cheaper one. The sparse case happens when many
+            // single-acks have already drained the map but a wide multi-ack
+            // arrives, e.g. recovery or a server that batches acks lazily.
+            const map_count = self.confirm_promises.count();
+            const range = delivery_tag - start + 1;
+            if (map_count == 0) {
+                // Nothing to do.
+            } else if (range <= @as(u64, map_count) * 2) {
+                var seq = start;
+                while (seq <= delivery_tag) : (seq += 1) {
+                    if (self.confirm_promises.fetchRemove(seq)) |kv| {
+                        kv.value.result = result;
+                        kv.value.event.set(io);
+                        resolved_count += 1;
+                    }
+                }
+            } else {
+                resolved_count = self.resolveSparseConfirms(start, delivery_tag, result, io);
             }
         }
 

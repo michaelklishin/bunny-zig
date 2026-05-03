@@ -172,7 +172,6 @@ pub const QueueArguments = struct {
     // Tanzu RabbitMQ: JMS queue arguments
 
     pub fn selectorFields(self: *QueueArguments, allocator: Allocator, fields: []const []const u8) !*QueueArguments {
-        // Encoded as an AMQP array of longstrings
         const items = try allocator.alloc(FieldValue, fields.len);
         for (fields, 0..) |field, i| {
             items[i] = .{ .long_string = field };

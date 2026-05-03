@@ -110,8 +110,8 @@ test "headers exchange routes when bound on heterogeneous header types" {
     const q = "bunny-zig.test.headers-types.q";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
 
-    // The binding requires three headers of different AMQP types: string, int,
-    // and bool. The published headers must match all three for x-match=all.
+    // The binding requires three headers of different AMQP 0-9-1 types: string,
+    // int, and bool. Published headers must match all three for x-match=all.
     var bind_entries = [_]bunny.FieldTable.Entry{
         .{ .key = "x-match", .value = .{ .long_string = "all" } },
         .{ .key = "kind", .value = .{ .long_string = "report" } },
