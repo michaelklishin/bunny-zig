@@ -22,7 +22,10 @@ and [`bunny-rs`](https://github.com/michaelklishin/bunny-rs) (Rust).
 
 ## Project Maturity
 
-This is a young project. Breaking API changes are possible between minor versions.
+This is a very young project heavily inspired by the [original Ruby Bunny](https://github.com/ruby-amqp/bunny),
+the [Swift Bunny](https://github.com/michaelklishin/bunny-swift), and [`bunny-rs`](https://github.com/michaelklishin/bunny-rs).
+
+Breaking API changes are possible, as is significant internal changes as Zig matures.
 
 
 ## Installation
@@ -32,7 +35,7 @@ Add bunny-zig as a dependency in your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .bunny = .{
-        .url = "https://github.com/michaelklishin/bunny-zig/archive/refs/tags/0.1.0.tar.gz",
+        .url = "https://github.com/michaelklishin/bunny-zig/archive/refs/heads/main.tar.gz",
         .hash = "...",
     },
 },
@@ -66,7 +69,8 @@ pub fn main() !void {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    const q = try ch.declareQueueHandle("hello", .{ .auto_delete = true });
+    var q = try ch.declareQueueHandle("hello", .{ .auto_delete = true });
+    defer q.deinit(allocator);
 
     try ch.confirmSelect();
     try q.publish("Hello, Zig world!", .{});
@@ -197,7 +201,7 @@ const args = try bunny.FieldTable.fromEntries(allocator, &.{
 defer args.deinit();
 
 try ch.basicQos(100, false);
-_ = try ch.basicConsumeWithArgs("events", "", .manual, false, args);
+_ = try ch.basicConsumeWithArgs("events", .manual, false, args);
 ```
 
 ### Queue Arguments Builder
@@ -311,8 +315,8 @@ for (0..10_000) |i| {
 // global=true:  channel-wide prefetch shared across all consumers
 try ch.basicQos(10, false);
 
-// Start consuming
-_ = try ch.basicConsume("my-queue", "my-consumer", .manual);
+// Auto-generated consumer tag (use `basicConsumeWithTag` for an explicit tag)
+_ = try ch.basicConsume("my-queue", .manual);
 
 // Receive deliveries (blocks until a message arrives)
 while (try ch.recvDelivery()) |delivery| {
@@ -324,7 +328,7 @@ while (try ch.recvDelivery()) |delivery| {
 ### Callback-based Consumers
 
 ```zig
-_ = try ch.basicConsumeWith("my-queue", "my-consumer", .manual, &struct {
+_ = try ch.basicConsumeWith("my-queue", .manual, &struct {
     fn handler(delivery: bunny.Delivery) void {
         std.debug.print("Got: {s}\n", .{delivery.body});
     }
@@ -379,7 +383,8 @@ try ch.exchangeUnbind("destination", "source", "routing.key");
 
 ```zig
 // Declare and get a handle for convenient operations
-const q = try ch.declareQueueHandle("my-queue", .{ .durable = true });
+var q = try ch.declareQueueHandle("my-queue", .{ .durable = true });
+defer q.deinit(allocator);
 try q.publish("hello", .{});
 try q.bind("my-exchange", "routing.key");
 _ = try q.purge();
