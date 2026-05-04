@@ -34,7 +34,7 @@ test "publish and consume with manual ack" {
     defer ch.closeChannel() catch {};
 
     _ = try ch.queueDeclare("bunny-zig.test.consume", .{ .exclusive = true, .auto_delete = true });
-    _ = try ch.basicConsume("bunny-zig.test.consume", "test-consumer", .manual);
+    _ = try ch.basicConsumeWithTag("bunny-zig.test.consume", "test-consumer", .manual);
 
     try ch.publishToQueue("bunny-zig.test.consume", "consumed message", .{});
 
@@ -146,7 +146,7 @@ test "publish and consume large message spanning multiple frames" {
     try ch.publishToQueue("bunny-zig.test.large-msg", body, .{});
     try testing.expect(try ch.waitForConfirms());
 
-    _ = try ch.basicConsume("bunny-zig.test.large-msg", "", .manual);
+    _ = try ch.basicConsume("bunny-zig.test.large-msg", .manual);
     const delivery = try ch.recvDelivery();
     try testing.expect(delivery != null);
     var d = delivery.?;
@@ -178,7 +178,7 @@ test "delivery tags are monotonically increasing within a channel" {
     }
     _ = try ch.waitForConfirms();
 
-    _ = try ch.basicConsume(q, "", .manual);
+    _ = try ch.basicConsume(q, .manual);
 
     var prev: u64 = 0;
     var seen: u32 = 0;

@@ -90,7 +90,7 @@ test "recovery: topology is replayed after reconnect" {
     });
     _ = try ch.waitForConfirms();
 
-    _ = try ch.basicConsume("bunny-zig.test.recovery-q", "", .manual);
+    _ = try ch.basicConsume("bunny-zig.test.recovery-q", .manual);
     const got = try ch.recvDelivery();
     try testing.expect(got != null);
     var delivery = got.?;
@@ -206,7 +206,7 @@ test "recovery: basic.qos and consumer are replayed after reconnect" {
     defer _ = ch.queueDelete(q) catch {};
 
     try ch.basicQos(1, false);
-    _ = try ch.basicConsume(q, "bunny-zig.recovery-consumer", .manual);
+    _ = try ch.basicConsumeWithTag(q, "bunny-zig.recovery-consumer", .manual);
 
     h.sleepMs(1200);
 
@@ -320,7 +320,7 @@ test "recovery: combined path, server-named queue plus consumer post-recovery de
     }
     try testing.expect(ch.isOpen());
 
-    _ = try ch.basicConsume(new_name, "", .manual);
+    _ = try ch.basicConsume(new_name, .manual);
 
     try ch.confirmSelect();
     try ch.publish("via-recovered-server-named", .{ .exchange = "", .routing_key = new_name });

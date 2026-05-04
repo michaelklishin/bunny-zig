@@ -13,7 +13,7 @@ test "reject and requeue" {
     try ch.confirmSelect();
 
     // Use a consumer for reliable delivery
-    _ = try ch.basicConsume("bunny-zig.test.reject", "", .manual);
+    _ = try ch.basicConsume("bunny-zig.test.reject", .manual);
 
     try ch.publishToQueue("bunny-zig.test.reject", "rejected message", .{});
     try testing.expect(try ch.waitForConfirms());
@@ -45,7 +45,7 @@ test "nack with requeue" {
     _ = try ch.queueDeclare("bunny-zig.test.nack", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
 
-    _ = try ch.basicConsume("bunny-zig.test.nack", "", .manual);
+    _ = try ch.basicConsume("bunny-zig.test.nack", .manual);
 
     try ch.publishToQueue("bunny-zig.test.nack", "nacked message", .{});
     try testing.expect(try ch.waitForConfirms());

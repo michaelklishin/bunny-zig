@@ -45,10 +45,12 @@ pub const TransportError = error{
 } || std.mem.Allocator.Error || posix.ReadError;
 
 pub const TlsOptions = struct {
+    /// Hostname for SNI and certificate verification.
     host: []const u8 = "localhost",
+    /// Path to a PEM CA bundle for chain validation.
     ca_file: ?[]const u8 = null,
-    /// Skip certificate verification (for testing only)
-    insecure: bool = false,
+    /// Skip TLS peer certificate chain verification. DO NOT use in production.
+    skip_peer_certificate_chain_verification: bool = false,
 };
 
 /// Low-level transport for sending and receiving AMQP 0-9-1 frames over TCP or TLS.
@@ -98,6 +100,9 @@ pub const Transport = struct {
     /// Connect with TLS using ianic/tls.zig (supports TLS 1.2 and 1.3).
     pub fn connectTls(allocator: std.mem.Allocator, host: []const u8, port: u16, tls_opts: TlsOptions, timeout: std.Io.Timeout) !Transport {
         const io = getIo();
+        if (tls_opts.skip_peer_certificate_chain_verification) {
+            log.warn("TLS to {s}:{d} skipping peer certificate chain verification", .{ host, port });
+        }
         const stream = try connectToHost(io, host, port, timeout);
         errdefer stream.close(io);
 
@@ -144,7 +149,7 @@ pub const Transport = struct {
         const tls_conn = tls.client(&reader.interface, &writer.interface, .{
             .host = tls_opts.host,
             .root_ca = ca_bundle,
-            .insecure_skip_verify = tls_opts.insecure,
+            .insecure_skip_verify = tls_opts.skip_peer_certificate_chain_verification,
             .rng = rng_source.interface(),
             .now = Io.Clock.real.now(io),
         }) catch |err| {

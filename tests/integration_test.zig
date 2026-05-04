@@ -29,6 +29,10 @@ test {
     _ = @import("integration/confirm_nack_tests.zig");
     _ = @import("integration/channel_error_taxonomy_tests.zig");
     _ = @import("integration/typed_errors_tests.zig");
+    _ = @import("integration/recovery_confirm_tests.zig");
+    _ = @import("integration/recovery_qos_tests.zig");
+    _ = @import("integration/consumer_helpers_tests.zig");
+    _ = @import("integration/tls_tests.zig");
     _ = @import("integration/connection_blocked_tests.zig");
     _ = @import("integration/return_tests.zig");
     _ = @import("integration/direct_reply_to_tests.zig");

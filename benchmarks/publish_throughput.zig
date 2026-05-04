@@ -84,7 +84,7 @@ fn runWorkload(workload: Workload, mode: Mode) !RunResult {
 
     _ = try con_ch.queueDeclare(queue_name, .{ .exclusive = true });
     try con_ch.basicQos(prefetch, false);
-    _ = try con_ch.basicConsume(queue_name, "", .manual);
+    _ = try con_ch.basicConsume(queue_name, .manual);
 
     if (mode == .confirm_periodic or mode == .confirm_per_message) {
         try pub_ch.confirmSelect();

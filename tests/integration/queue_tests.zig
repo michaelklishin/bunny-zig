@@ -333,7 +333,7 @@ test "passive declare reports message_count and consumer_count" {
     try testing.expectEqual(@as(u32, 2), before.message_count);
     try testing.expectEqual(@as(u32, 0), before.consumer_count);
 
-    _ = try ch.basicConsume(q, "", .manual);
+    _ = try ch.basicConsume(q, .manual);
 
     var got: u32 = 0;
     var attempts: u32 = 0;

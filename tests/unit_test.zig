@@ -4,4 +4,5 @@
 
 test {
     _ = @import("unit/typed_errors_unit_tests.zig");
+    _ = @import("unit/recovery_unit_tests.zig");
 }

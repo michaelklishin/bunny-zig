@@ -31,7 +31,7 @@ test "basic.qos with global=false caps deliveries per consumer" {
     _ = try ch.waitForConfirms();
 
     try ch.basicQos(2, false);
-    _ = try ch.basicConsume(q, "", .manual);
+    _ = try ch.basicConsume(q, .manual);
 
     var got: u32 = 0;
     for (0..40) |_| {
@@ -65,7 +65,7 @@ test "basic.qos(0) means unlimited delivery" {
     _ = try ch.waitForConfirms();
 
     try ch.basicQos(0, false);
-    _ = try ch.basicConsume(q, "", .manual);
+    _ = try ch.basicConsume(q, .manual);
 
     var got: u32 = 0;
     for (0..80) |_| {

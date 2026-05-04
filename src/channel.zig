@@ -317,6 +317,8 @@ pub const Channel = struct {
         self.confirm_promises.deinit();
         for (self.promise_pool.items) |p| self.allocator.destroy(p);
         self.promise_pool.deinit(self.allocator);
+        var cb_it = self.consumer_callbacks.keyIterator();
+        while (cb_it.next()) |k| self.allocator.free(k.*);
         self.consumer_callbacks.deinit();
         self.event_listeners.deinit(self.allocator);
         if (self.last_close) |*info| info.deinit(self.allocator);
@@ -444,7 +446,7 @@ pub const Channel = struct {
         };
         var args = try FieldTable.fromEntries(self.allocator, &entries);
         defer args.deinit();
-        return self.basicConsumeWithArgs(queue_name, consumer_tag, ack_mode, false, args);
+        return self.basicConsumeWithTagAndArgs(queue_name, consumer_tag, ack_mode, false, args);
     }
 
     /// Declare a temporary (exclusive, auto-delete) queue with a server-generated name.
@@ -804,12 +806,22 @@ pub const Channel = struct {
         }
     }
 
-    /// Start consuming from a queue. Returns the consumer tag.
-    pub fn basicConsume(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode) ![]const u8 {
-        return self.basicConsumeWithArgs(queue, consumer_tag, ack_mode, false, FieldTable.empty);
+    /// Start consuming with a server-generated consumer tag.
+    pub fn basicConsume(self: *Channel, queue: []const u8, ack_mode: AckMode) ![]const u8 {
+        return self.basicConsumeWithTagAndArgs(queue, "", ack_mode, false, FieldTable.empty);
     }
 
-    pub fn basicConsumeWithArgs(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode, exclusive: bool, arguments: FieldTable) ![]const u8 {
+    /// Start consuming with an explicit consumer tag.
+    pub fn basicConsumeWithTag(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode) ![]const u8 {
+        return self.basicConsumeWithTagAndArgs(queue, consumer_tag, ack_mode, false, FieldTable.empty);
+    }
+
+    /// Start consuming with a server-generated consumer tag, exclusive flag, and arguments.
+    pub fn basicConsumeWithArgs(self: *Channel, queue: []const u8, ack_mode: AckMode, exclusive: bool, arguments: FieldTable) ![]const u8 {
+        return self.basicConsumeWithTagAndArgs(queue, "", ack_mode, exclusive, arguments);
+    }
+
+    pub fn basicConsumeWithTagAndArgs(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode, exclusive: bool, arguments: FieldTable) ![]const u8 {
         try self.connection.sendMethod(self.id, .{ .basic_consume = .{
             .queue = queue,
             .consumer_tag = consumer_tag,
@@ -820,12 +832,15 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         return switch (response) {
             .basic_consume_ok => |ok| blk: {
+                const qos = self.recordedPrefetch();
                 self.connection.topology.recordConsumer(self.allocator, .{
                     .queue = queue,
                     .consumer_tag = ok.consumer_tag,
                     .no_ack = ack_mode == .automatic,
                     .exclusive = exclusive,
                     .channel_id = self.id,
+                    .prefetch_count = qos.count,
+                    .prefetch_global = qos.global,
                 }) catch {};
                 break :blk ok.consumer_tag;
             },
@@ -834,11 +849,28 @@ pub const Channel = struct {
         };
     }
 
-    /// Start consuming with a callback handler. The callback is invoked for each delivery.
-    pub fn basicConsumeWith(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode, handler: *const fn (Delivery) void) ![]const u8 {
-        const tag = try self.basicConsume(queue, consumer_tag, ack_mode);
-        try self.consumer_callbacks.put(tag, handler);
-        return tag;
+    fn recordedPrefetch(self: *Channel) struct { count: u16, global: bool } {
+        for (self.connection.topology.channels.items) |rch| {
+            if (rch.id == self.id) return .{ .count = rch.prefetch_count, .global = rch.prefetch_global };
+        }
+        return .{ .count = 0, .global = false };
+    }
+
+    /// Start consuming with a callback handler and a server-generated consumer tag.
+    pub fn basicConsumeWith(self: *Channel, queue: []const u8, ack_mode: AckMode, handler: *const fn (Delivery) void) ![]const u8 {
+        return self.basicConsumeWithTagAndHandler(queue, "", ack_mode, handler);
+    }
+
+    /// Start consuming with a callback handler and an explicit consumer tag.
+    /// The returned tag is owned by the channel and stays valid until cancellation.
+    pub fn basicConsumeWithTagAndHandler(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode, handler: *const fn (Delivery) void) ![]const u8 {
+        const tag = try self.basicConsumeWithTag(queue, consumer_tag, ack_mode);
+        // The broker-returned tag aliases the read buffer, which gets recycled.
+        // Dupe so the map key and the value returned to the caller stay valid.
+        const owned_tag = try self.allocator.dupe(u8, tag);
+        errdefer self.allocator.free(owned_tag);
+        try self.consumer_callbacks.put(owned_tag, handler);
+        return owned_tag;
     }
 
     /// Cancel a consumer.
@@ -847,7 +879,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .basic_cancel_ok => {
-                _ = self.consumer_callbacks.remove(consumer_tag);
+                if (self.consumer_callbacks.fetchRemove(consumer_tag)) |kv| self.allocator.free(kv.key);
             },
             .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
@@ -1127,6 +1159,20 @@ pub const Channel = struct {
         try self.event_listeners.add(self.allocator, cb);
     }
 
+    /// Reset publisher-confirm sequence state so post-recovery publishes match
+    /// the broker's restarted delivery-tag counter. Must be called only when
+    /// the channel is closed and the reader thread is not delivering frames.
+    pub fn resetConfirmStateAfterRecovery(self: *Channel) void {
+        const io = getIo();
+        self.confirm_mutex.lockUncancelable(io);
+        defer self.confirm_mutex.unlock(io);
+        self.next_publish_seq_no = 0;
+        self.outstanding_count = 0;
+        self.last_confirmed_seq = 0;
+        self.confirm_promises.clearRetainingCapacity();
+        self.confirm_signal.broadcast(io);
+    }
+
     /// Internal close (called during connection shutdown, does not send to server).
     pub fn closeInternal(self: *Channel) void {
         self.is_open.store(false, .release);
@@ -1282,7 +1328,7 @@ pub const Channel = struct {
             },
             .basic_cancel => |cancel| {
                 log.info("consumer cancelled by server on channel {d}", .{self.id});
-                _ = self.consumer_callbacks.remove(cancel.consumer_tag);
+                if (self.consumer_callbacks.fetchRemove(cancel.consumer_tag)) |kv| self.allocator.free(kv.key);
                 if (self.on_cancel) |cb| cb(cancel.consumer_tag);
                 self.event_listeners.emit(.{ .consumer_cancelled = cancel.consumer_tag });
             },

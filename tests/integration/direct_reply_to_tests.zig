@@ -22,10 +22,10 @@ test "direct reply-to: RPC roundtrip via amq.rabbitmq.reply-to" {
 
     const rpc_queue = "bunny-zig.test.rpc-server";
     _ = try server_ch.queueDeclare(rpc_queue, .{ .exclusive = true, .auto_delete = true });
-    _ = try server_ch.basicConsume(rpc_queue, "rpc-server", .automatic);
+    _ = try server_ch.basicConsumeWithTag(rpc_queue, "rpc-server", .automatic);
 
     // Client subscribes to the pseudo-queue. Auto-ack is required by the broker.
-    _ = try client_ch.basicConsume("amq.rabbitmq.reply-to", "rpc-client", .automatic);
+    _ = try client_ch.basicConsumeWithTag("amq.rabbitmq.reply-to", "rpc-client", .automatic);
 
     try client_ch.publish("ping", .{
         .exchange = "",

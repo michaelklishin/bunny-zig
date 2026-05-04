@@ -634,6 +634,11 @@ pub const Connection = struct {
 
             self.channel_mutex.lockUncancelable(getIo());
             if (self.channels.get(recorded_ch.id)) |ch| {
+                // `confirm.select` restarts the broker's delivery-tag counter at 1.
+                // Reset the channel's confirm state so post-recovery publishes
+                // line up; pre-recovery promises were already nack'd in
+                // `closeInternal` but their map entries linger.
+                if (recorded_ch.confirm_mode) ch.resetConfirmStateAfterRecovery();
                 ch.is_open.store(true, .release);
                 ch.rpc_mutex.lockUncancelable(getIo());
                 ch.rpc_response = null;
@@ -742,6 +747,19 @@ pub const Connection = struct {
                 },
                 .consumer => |c| {
                     const resolved_queue = self.topology.resolveQueueName(c.queue);
+                    // Replay this consumer's per-consumer QoS before re-attaching
+                    // it so each consumer keeps its original prefetch scope.
+                    if (c.prefetch_count > 0) {
+                        self.transport.sendMethod(c.channel_id, .{ .basic_qos = .{
+                            .prefetch_count = c.prefetch_count,
+                            .global = c.prefetch_global,
+                        } }) catch |err| {
+                            log.warn("recovery: failed to replay basic.qos for consumer '{s}': {}", .{ c.consumer_tag, err });
+                        };
+                        _ = self.transport.readFrame(self.allocator) catch |err| {
+                            log.warn("recovery: failed to read basic.qos-ok for consumer '{s}': {}", .{ c.consumer_tag, err });
+                        };
+                    }
                     self.transport.sendMethod(c.channel_id, .{ .basic_consume = .{
                         .queue = resolved_queue,
                         .consumer_tag = c.consumer_tag,

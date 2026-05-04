@@ -31,12 +31,24 @@ pub const Queue = struct {
         return self.channel.queueDelete(self.name);
     }
 
-    pub fn subscribe(self: Queue, consumer_tag: []const u8, ack_mode: AckMode) ![]const u8 {
-        return self.channel.basicConsume(self.name, consumer_tag, ack_mode);
+    /// Subscribe with a server-generated consumer tag.
+    pub fn subscribe(self: Queue, ack_mode: AckMode) ![]const u8 {
+        return self.channel.basicConsume(self.name, ack_mode);
     }
 
-    pub fn subscribeWith(self: Queue, consumer_tag: []const u8, ack_mode: AckMode, handler: *const fn (Delivery) void) ![]const u8 {
-        return self.channel.basicConsumeWith(self.name, consumer_tag, ack_mode, handler);
+    /// Subscribe with an explicit consumer tag.
+    pub fn subscribeWithTag(self: Queue, consumer_tag: []const u8, ack_mode: AckMode) ![]const u8 {
+        return self.channel.basicConsumeWithTag(self.name, consumer_tag, ack_mode);
+    }
+
+    /// Subscribe with a callback handler and a server-generated consumer tag.
+    pub fn subscribeWith(self: Queue, ack_mode: AckMode, handler: *const fn (Delivery) void) ![]const u8 {
+        return self.channel.basicConsumeWith(self.name, ack_mode, handler);
+    }
+
+    /// Subscribe with a callback handler and an explicit consumer tag.
+    pub fn subscribeWithTagAndHandler(self: Queue, consumer_tag: []const u8, ack_mode: AckMode, handler: *const fn (Delivery) void) ![]const u8 {
+        return self.channel.basicConsumeWithTagAndHandler(self.name, consumer_tag, ack_mode, handler);
     }
 
     pub fn get(self: Queue, ack_mode: AckMode) !?GetResult {

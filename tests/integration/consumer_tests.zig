@@ -14,8 +14,8 @@ test "two consumers on the same queue" {
 
     _ = try ch1.queueDeclare("bunny-zig.test.two-consumers", .{ .exclusive = true, .auto_delete = true });
 
-    _ = try ch1.basicConsume("bunny-zig.test.two-consumers", "c1", .manual);
-    _ = try ch2.basicConsume("bunny-zig.test.two-consumers", "c2", .manual);
+    _ = try ch1.basicConsumeWithTag("bunny-zig.test.two-consumers", "c1", .manual);
+    _ = try ch2.basicConsumeWithTag("bunny-zig.test.two-consumers", "c2", .manual);
 
     try ch1.confirmSelect();
     for (0..4) |i| {
@@ -61,7 +61,7 @@ test "consume with automatic ack does not require manual acknowledgement" {
     _ = try ch.queueDeclare(q, .{ .durable = true });
     defer _ = ch.queueDelete(q) catch {};
 
-    _ = try ch.basicConsume(q, "", .automatic);
+    _ = try ch.basicConsume(q, .automatic);
 
     try ch.confirmSelect();
     try ch.publishToQueue(q, "auto-acked", .{});
@@ -90,7 +90,7 @@ test "consume returns the consumer tag the client supplied" {
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
 
     const requested = "bunny-zig.requested-tag";
-    const got = try ch.basicConsume(q, requested, .manual);
+    const got = try ch.basicConsumeWithTag(q, requested, .manual);
     try testing.expectEqualSlices(u8, requested, got);
 }
 
@@ -105,7 +105,7 @@ test "client-initiated basic.cancel stops further deliveries" {
     _ = try ch.queueDeclare(q, .{ .durable = true });
     defer _ = ch.queueDelete(q) catch {};
 
-    const tag = try ch.basicConsume(q, "", .manual);
+    const tag = try ch.basicConsume(q, .manual);
 
     try ch.confirmSelect();
     try ch.publishToQueue(q, "before-cancel", .{});
@@ -163,7 +163,7 @@ test "server-initiated basic.cancel fires when queue is deleted" {
     // same connection may declare consumers and delete the queue.
     _ = try ch_consume.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
     ch_consume.on_cancel = &Cancel.handler;
-    _ = try ch_consume.basicConsume(q, "", .manual);
+    _ = try ch_consume.basicConsume(q, .manual);
 
     _ = try ch_admin.queueDelete(q);
 
@@ -204,7 +204,7 @@ test "client-initiated basic.cancel does not requeue unacknowledged messages" {
     try ch.publishToQueue(q, "hold", .{});
     _ = try ch.waitForConfirms();
 
-    const tag = try ch.basicConsume(q, "", .manual);
+    const tag = try ch.basicConsume(q, .manual);
     const got = try ch.recvDelivery();
     try testing.expect(got != null);
     var d = got.?;
@@ -242,8 +242,8 @@ test "single-active-consumer: only one consumer receives messages at a time" {
     _ = try ch1.queueDeclare(q, .{ .durable = true, .arguments = args });
     defer _ = ch1.queueDelete(q) catch {};
 
-    _ = try ch1.basicConsume(q, "active", .manual);
-    _ = try ch2.basicConsume(q, "standby", .manual);
+    _ = try ch1.basicConsumeWithTag(q, "active", .manual);
+    _ = try ch2.basicConsumeWithTag(q, "standby", .manual);
 
     try ch1.confirmSelect();
     for (0..4) |i| {

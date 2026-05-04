@@ -18,7 +18,7 @@ test "basic.recover with requeue=true redelivers unacknowledged messages" {
     try ch.publishToQueue(q, "two", .{});
     _ = try ch.waitForConfirms();
 
-    _ = try ch.basicConsume(q, "", .manual);
+    _ = try ch.basicConsume(q, .manual);
 
     var first: u32 = 0;
     while (first < 2) : (first += 1) {
@@ -60,7 +60,7 @@ test "basic.recover with auto-ack does nothing because nothing is unacked" {
     try ch.publishToQueue(q, "auto", .{});
     _ = try ch.waitForConfirms();
 
-    _ = try ch.basicConsume(q, "", .automatic);
+    _ = try ch.basicConsume(q, .automatic);
     const got = try ch.recvDelivery();
     try testing.expect(got != null);
     var m = got.?;

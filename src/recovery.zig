@@ -62,6 +62,10 @@ pub const RecordedConsumer = struct {
     no_ack: bool,
     exclusive: bool,
     channel_id: u16,
+    /// Per-consumer prefetch captured at basic.consume time. Replayed before
+    /// the consumer is re-attached so each consumer keeps its own QoS scope.
+    prefetch_count: u16 = 0,
+    prefetch_global: bool = false,
 };
 
 pub const RecordedChannel = struct {
@@ -222,6 +226,8 @@ pub const TopologyRegistry = struct {
             .no_ack = c.no_ack,
             .exclusive = c.exclusive,
             .channel_id = c.channel_id,
+            .prefetch_count = c.prefetch_count,
+            .prefetch_global = c.prefetch_global,
         } });
     }
 

@@ -33,7 +33,7 @@ test "stream queue: x-stream-offset=first delivers history from the beginning" {
         .{ .key = "x-stream-offset", .value = .{ .long_string = "first" } },
     };
     const args: bunny.FieldTable = .{ .entries = &args_entries, .allocator = undefined };
-    _ = try ch.basicConsumeWithArgs(q, "stream-from-first", .manual, false, args);
+    _ = try ch.basicConsumeWithTagAndArgs(q, "stream-from-first", .manual, false, args);
 
     var received: u32 = 0;
     for (0..80) |_| {

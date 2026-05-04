@@ -66,14 +66,16 @@ pub fn main() !void {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    _ = try ch.queueDeclare("hello", .{ .auto_delete = true });
+    const q = try ch.declareQueueHandle("hello", .{ .auto_delete = true });
 
     try ch.confirmSelect();
-    try ch.publishToQueue("hello", "Hello, World!", .{});
+    try q.publish("Hello, Zig world!", .{});
     _ = try ch.waitForConfirms();
 
-    _ = try ch.basicConsume("hello", "", .manual);
-    if (try ch.recvDelivery()) |msg| {
+    _ = try q.subscribe(.manual);
+    if (try ch.recvDelivery()) |raw| {
+        var msg = raw;
+        defer msg.deinit(allocator);
         std.debug.print("Received: {s}\n", .{msg.body});
         try ch.basicAck(msg.delivery_tag, false);
     }
@@ -139,6 +141,33 @@ try conn.addEventListener(&struct {
 }.handler);
 ```
 
+### TLS
+
+```zig
+// AMQPS via URI (default port 5671)
+const conn = try bunny.Connection.openUri(allocator, "amqps://user:pass@rmq.example.com/vhost");
+
+// Explicit TLS options with a custom CA bundle
+const conn2 = try bunny.Connection.open(allocator, .{
+    .host = "rmq.example.com",
+    .port = 5671,
+    .tls = .{
+        .host = "rmq.example.com",
+        .ca_file = "/etc/rabbitmq/ssl/ca_certificate.pem",
+    },
+});
+
+// Test-only: skip chain verification. DO NOT use in production.
+const conn3 = try bunny.Connection.open(allocator, .{
+    .host = "localhost",
+    .port = 5671,
+    .tls = .{
+        .host = "localhost",
+        .skip_peer_certificate_chain_verification = true,
+    },
+});
+```
+
 ### Queue Types
 
 ```zig
@@ -154,6 +183,21 @@ _ = try ch.streamQueue("my.stream.queue");
 // Temporary queue (server-named, transient, exclusive)
 const tmp = try ch.temporaryQueue();
 std.debug.print("Temporary queue: {s}\n", .{tmp.name});
+```
+
+### Stream Queues
+
+```zig
+_ = try ch.streamQueue("events");
+
+// Consume from the beginning of the stream
+const args = try bunny.FieldTable.fromEntries(allocator, &.{
+    .{ .key = "x-stream-offset", .value = .{ .long_string = "first" } },
+});
+defer args.deinit();
+
+try ch.basicQos(100, false);
+_ = try ch.basicConsumeWithArgs("events", "", .manual, false, args);
 ```
 
 ### Queue Arguments Builder
@@ -263,7 +307,8 @@ for (0..10_000) |i| {
 ### Consuming Messages
 
 ```zig
-// Set prefetch (QoS)
+// global=false: per-consumer prefetch (each consumer gets its own window)
+// global=true:  channel-wide prefetch shared across all consumers
 try ch.basicQos(10, false);
 
 // Start consuming
@@ -350,14 +395,83 @@ try ch.queueBind("my-queue", "my-exchange", "routing.key.*");
 try ch.queueUnbind("my-queue", "my-exchange", "routing.key.*");
 ```
 
-### Returned Messages
+### Headers Exchange
+
+```zig
+try ch.declareHeaders("orders.headers");
+_ = try ch.queueDeclare("orders.eu", .{ .auto_delete = true });
+
+// Bind with x-match=all so every header pair must match
+const bind_args = try bunny.FieldTable.fromEntries(allocator, &.{
+    .{ .key = "x-match", .value = .{ .long_string = "all" } },
+    .{ .key = "region", .value = .{ .long_string = "eu" } },
+    .{ .key = "priority", .value = .{ .i32 = 5 } },
+});
+defer bind_args.deinit();
+try ch.queueBindWithArgs("orders.eu", "orders.headers", "", bind_args);
+
+// Publish with headers that match
+const headers = try bunny.FieldTable.fromEntries(allocator, &.{
+    .{ .key = "region", .value = .{ .long_string = "eu" } },
+    .{ .key = "priority", .value = .{ .i32 = 5 } },
+});
+defer headers.deinit();
+try ch.publish("payload", .{
+    .exchange = "orders.headers",
+    .properties = bunny.BasicProperties.default.withHeaders(headers),
+});
+```
+
+### Mandatory Publish and Returned Messages
 
 ```zig
 ch.on_return = &struct {
     fn handler(msg: bunny.ReturnedMessage) void {
-        std.debug.print("Message returned: {s}\n", .{msg.reply_text});
+        std.debug.print("returned [{d}] {s} from {s}\n", .{ msg.reply_code, msg.reply_text, msg.exchange });
     }
 }.handler;
+
+try ch.confirmSelect();
+try ch.publish("won't route", .{
+    .exchange = "amq.direct",
+    .routing_key = "no.such.binding",
+    .mandatory = true,
+});
+_ = try ch.waitForConfirms();
+```
+
+### Typed Channel Errors
+
+```zig
+const result = ch.queueDeclarePassive("might.not.exist");
+result catch |err| switch (err) {
+    error.NotFound => {
+        // Channel is closed; inspect the broker's reply text and offending method.
+        if (ch.lastClose()) |info| {
+            std.debug.print("404 on class {d} method {d}: {s}\n", .{ info.class_id, info.method_id, info.reply_text });
+        }
+    },
+    error.AccessRefused, error.PreconditionFailed, error.ResourceLocked => return err,
+    else => return err,
+};
+```
+
+### [`connection.blocked`](https://www.rabbitmq.com/docs/connection-blocked) Notifications
+
+```zig
+const conn = try bunny.Connection.open(allocator, .{ .host = "localhost" });
+defer conn.deinit();
+
+// Fired when the broker pauses publishers due to memory or disk pressure.
+try conn.addEventListener(&struct {
+    fn handler(event: bunny.ConnectionEvent) void {
+        switch (event) {
+            .blocked => |reason| std.debug.print("blocked: {s}\n", .{reason}),
+            .unblocked => std.debug.print("unblocked\n", .{}),
+            else => {},
+        }
+    }
+}.handler);
 ```
 
 ### Transactions

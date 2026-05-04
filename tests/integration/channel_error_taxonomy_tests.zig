@@ -62,7 +62,7 @@ test "channel error taxonomy: RESOURCE_LOCKED (405) on cross-connection exclusiv
     const other_ch = try other.openChannel();
     defer other_ch.closeChannel() catch {};
 
-    const result = other_ch.basicConsume(q, "", .manual);
+    const result = other_ch.basicConsume(q, .manual);
     try testing.expectError(error.ResourceLocked, result);
 
     const info = other_ch.lastClose() orelse return error.TestUnexpectedResult;

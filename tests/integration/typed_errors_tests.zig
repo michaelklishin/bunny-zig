@@ -96,7 +96,7 @@ test "typed errors: ResourceLocked when consuming from a peer-exclusive queue" {
     const peer_ch = try peer.openChannel();
     defer peer_ch.closeChannel() catch {};
 
-    const result = peer_ch.basicConsume(q, "", .manual);
+    const result = peer_ch.basicConsume(q, .manual);
     try testing.expectError(error.ResourceLocked, result);
     const info = peer_ch.lastClose() orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(u16, 405), info.reply_code);
