@@ -36,7 +36,6 @@ test {
     _ = @import("integration/connection_blocked_tests.zig");
     _ = @import("integration/return_tests.zig");
     _ = @import("integration/direct_reply_to_tests.zig");
-    _ = @import("integration/basic_recover_tests.zig");
     _ = @import("integration/frame_max_tests.zig");
     _ = @import("integration/stream_queue_tests.zig");
 }

@@ -20,20 +20,23 @@ test "publish with mandatory: returned and routable messages are both confirmed"
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const ex = "bunny-zig.test.mandatory-with-confirms";
-    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
-    defer ch.exchangeDelete(ex) catch {};
+    const exchange = try ch.exchangeDeclare(
+        "bunny-zig.test.mandatory-with-confirms",
+        bunny.ExchangeType.direct,
+        .{ .auto_delete = true },
+    );
+    defer ch.exchangeDelete(exchange.name) catch {};
 
-    const q = "bunny-zig.test.mandatory-with-confirms.q";
-    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
-    try ch.queueBind(q, ex, "bound");
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
+    try queue.bind(exchange.name, "bound");
 
     ch.on_return = &Counter.handler;
 
     try ch.confirmSelect();
-    try ch.publish("routed-1", .{ .exchange = ex, .routing_key = "bound", .mandatory = true });
-    try ch.publish("dropped", .{ .exchange = ex, .routing_key = "unbound", .mandatory = true });
-    try ch.publish("routed-2", .{ .exchange = ex, .routing_key = "bound", .mandatory = true });
+    try exchange.publishMandatory("routed-1", "bound", .{});
+    try exchange.publishMandatory("dropped", "unbound", .{});
+    try exchange.publishMandatory("routed-2", "bound", .{});
 
     // RabbitMQ confirms returned messages too, so all three are accounted for.
     try testing.expect(try ch.waitForConfirms());
@@ -44,10 +47,9 @@ test "publish with mandatory: returned and routable messages are both confirmed"
 
     var seen: u32 = 0;
     for (0..40) |_| {
-        if (try ch.basicGet(q, .manual)) |raw| {
-            var m = raw;
+        if (try queue.get(.manual)) |m| {
             defer m.deinit(h.test_allocator);
-            try ch.basicAck(m.delivery_tag, false);
+            try m.ack();
             seen += 1;
             if (seen == 2) break;
         } else h.sleepMs(25);
@@ -72,18 +74,17 @@ test "publish with mandatory: unroutable message triggers basic.return" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const ex = "bunny-zig.test.mandatory-fanout";
-    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.fanout, .{ .auto_delete = true });
-    defer ch.exchangeDelete(ex) catch {};
+    const exchange = try ch.exchangeDeclare(
+        "bunny-zig.test.mandatory-fanout",
+        bunny.ExchangeType.fanout,
+        .{ .auto_delete = true },
+    );
+    defer ch.exchangeDelete(exchange.name) catch {};
 
     ch.on_return = &Counter.handler;
 
     try ch.confirmSelect();
-    try ch.publish("dropped", .{
-        .exchange = ex,
-        .routing_key = "no.route",
-        .mandatory = true,
-    });
+    try exchange.publishMandatory("dropped", "no.route", .{});
     _ = try ch.waitForConfirms();
 
     var attempts: u32 = 0;
@@ -98,16 +99,19 @@ test "sender-selected distribution: CC header adds extra routing keys" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const ex = "bunny-zig.test.ssd-direct";
-    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
-    defer ch.exchangeDelete(ex) catch {};
+    const exchange = try ch.exchangeDeclare(
+        "bunny-zig.test.ssd-direct",
+        bunny.ExchangeType.direct,
+        .{ .auto_delete = true },
+    );
+    defer ch.exchangeDelete(exchange.name) catch {};
 
-    const q_primary = "bunny-zig.test.ssd.primary";
-    const q_cc = "bunny-zig.test.ssd.cc";
-    _ = try ch.queueDeclare(q_primary, .{ .exclusive = true, .auto_delete = true });
-    _ = try ch.queueDeclare(q_cc, .{ .exclusive = true, .auto_delete = true });
-    try ch.queueBind(q_primary, ex, "primary");
-    try ch.queueBind(q_cc, ex, "cc");
+    var primary = try ch.temporaryQueue();
+    defer primary.deinit(h.test_allocator);
+    var cc = try ch.temporaryQueue();
+    defer cc.deinit(h.test_allocator);
+    try primary.bind(exchange.name, "primary");
+    try cc.bind(exchange.name, "cc");
 
     // The CC header carries an array of additional routing keys. The broker
     // routes the message to bindings matching either the primary key or any CC entry.
@@ -119,24 +123,22 @@ test "sender-selected distribution: CC header adds extra routing keys" {
     };
 
     try ch.confirmSelect();
-    try ch.publish("fanned", .{
-        .exchange = ex,
-        .routing_key = "primary",
-        .properties = .{ .headers = .{ .entries = &header_entries, .allocator = undefined } },
+    try exchange.publish("fanned", "primary", .{
+        .headers = .{ .entries = &header_entries, .allocator = undefined },
     });
     _ = try ch.waitForConfirms();
 
-    const got_primary = try h.pollBasicGet(ch, q_primary);
+    const got_primary = try h.pollBasicGet(ch, primary.name);
     try testing.expect(got_primary != null);
-    var m_primary = got_primary.?;
+    const m_primary = got_primary.?;
     defer m_primary.deinit(h.test_allocator);
-    try ch.basicAck(m_primary.delivery_tag, false);
+    try m_primary.ack();
 
-    const got_cc = try h.pollBasicGet(ch, q_cc);
+    const got_cc = try h.pollBasicGet(ch, cc.name);
     try testing.expect(got_cc != null);
-    var m_cc = got_cc.?;
+    const m_cc = got_cc.?;
     defer m_cc.deinit(h.test_allocator);
-    try ch.basicAck(m_cc.delivery_tag, false);
+    try m_cc.ack();
 }
 
 test "sender-selected distribution: BCC header routes but is stripped from delivery" {
@@ -147,16 +149,19 @@ test "sender-selected distribution: BCC header routes but is stripped from deliv
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const ex = "bunny-zig.test.ssd-bcc";
-    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
-    defer ch.exchangeDelete(ex) catch {};
+    const exchange = try ch.exchangeDeclare(
+        "bunny-zig.test.ssd-bcc",
+        bunny.ExchangeType.direct,
+        .{ .auto_delete = true },
+    );
+    defer ch.exchangeDelete(exchange.name) catch {};
 
-    const q_primary = "bunny-zig.test.ssd-bcc.primary";
-    const q_bcc = "bunny-zig.test.ssd-bcc.bcc";
-    _ = try ch.queueDeclare(q_primary, .{ .exclusive = true, .auto_delete = true });
-    _ = try ch.queueDeclare(q_bcc, .{ .exclusive = true, .auto_delete = true });
-    try ch.queueBind(q_primary, ex, "primary");
-    try ch.queueBind(q_bcc, ex, "shadow");
+    var primary = try ch.temporaryQueue();
+    defer primary.deinit(h.test_allocator);
+    var bcc = try ch.temporaryQueue();
+    defer bcc.deinit(h.test_allocator);
+    try primary.bind(exchange.name, "primary");
+    try bcc.bind(exchange.name, "shadow");
 
     const bcc_array = [_]bunny.FieldValue{
         .{ .long_string = "shadow" },
@@ -167,25 +172,22 @@ test "sender-selected distribution: BCC header routes but is stripped from deliv
     };
 
     try ch.confirmSelect();
-    try ch.publish("fanned", .{
-        .exchange = ex,
-        .routing_key = "primary",
-        .properties = .{ .headers = .{ .entries = &header_entries, .allocator = undefined } },
+    try exchange.publish("fanned", "primary", .{
+        .headers = .{ .entries = &header_entries, .allocator = undefined },
     });
     _ = try ch.waitForConfirms();
 
-    // Both queues receive the message.
-    const got_primary = try h.pollBasicGet(ch, q_primary);
+    const got_primary = try h.pollBasicGet(ch, primary.name);
     try testing.expect(got_primary != null);
-    var m_primary = got_primary.?;
+    const m_primary = got_primary.?;
     defer m_primary.deinit(h.test_allocator);
-    try ch.basicAck(m_primary.delivery_tag, false);
+    try m_primary.ack();
 
-    const got_bcc = try h.pollBasicGet(ch, q_bcc);
+    const got_bcc = try h.pollBasicGet(ch, bcc.name);
     try testing.expect(got_bcc != null);
-    var m_bcc = got_bcc.?;
+    const m_bcc = got_bcc.?;
     defer m_bcc.deinit(h.test_allocator);
-    try ch.basicAck(m_bcc.delivery_tag, false);
+    try m_bcc.ack();
 
     // The BCC header is stripped from the delivered headers; other headers survive.
     if (m_bcc.properties.headers) |delivered| {
@@ -208,39 +210,37 @@ test "topic exchange routes by wildcard patterns" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const ex = "bunny-zig.test.topic-wildcards";
-    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.topic, .{ .auto_delete = true });
-    defer ch.exchangeDelete(ex) catch {};
+    const exchange = try ch.declareTopicExchange("bunny-zig.test.topic-wildcards");
+    defer ch.exchangeDelete(exchange.name) catch {};
 
-    const q_star = "bunny-zig.test.topic-wildcards.star";
-    const q_hash = "bunny-zig.test.topic-wildcards.hash";
-    _ = try ch.queueDeclare(q_star, .{ .exclusive = true, .auto_delete = true });
-    _ = try ch.queueDeclare(q_hash, .{ .exclusive = true, .auto_delete = true });
+    var q_star = try ch.temporaryQueue();
+    defer q_star.deinit(h.test_allocator);
+    var q_hash = try ch.temporaryQueue();
+    defer q_hash.deinit(h.test_allocator);
 
-    try ch.queueBind(q_star, ex, "logs.*");
-    try ch.queueBind(q_hash, ex, "logs.#");
+    try q_star.bind(exchange.name, "logs.*");
+    try q_hash.bind(exchange.name, "logs.#");
 
     try ch.confirmSelect();
-    try ch.publish("one-segment", .{ .exchange = ex, .routing_key = "logs.info" });
-    try ch.publish("two-segments", .{ .exchange = ex, .routing_key = "logs.app.error" });
+    try exchange.publish("one-segment", "logs.info", .{});
+    try exchange.publish("two-segments", "logs.app.error", .{});
     _ = try ch.waitForConfirms();
 
     // logs.* matches one segment only.
-    const got_star = try h.pollBasicGet(ch, q_star);
+    const got_star = try h.pollBasicGet(ch, q_star.name);
     try testing.expect(got_star != null);
-    var star_msg = got_star.?;
+    const star_msg = got_star.?;
     defer star_msg.deinit(h.test_allocator);
     try testing.expectEqualSlices(u8, "one-segment", star_msg.body);
-    try ch.basicAck(star_msg.delivery_tag, false);
-    try testing.expect((try ch.basicGet(q_star, .manual)) == null);
+    try star_msg.ack();
+    try testing.expect((try q_star.get(.manual)) == null);
 
     // logs.# matches both.
     var seen: u32 = 0;
     for (0..20) |_| {
-        if (try ch.basicGet(q_hash, .manual)) |raw| {
-            var m = raw;
+        if (try q_hash.get(.manual)) |m| {
             defer m.deinit(h.test_allocator);
-            try ch.basicAck(m.delivery_tag, false);
+            try m.ack();
             seen += 1;
             if (seen == 2) break;
         } else h.sleepMs(25);

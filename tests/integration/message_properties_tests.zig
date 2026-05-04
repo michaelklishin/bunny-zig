@@ -10,7 +10,8 @@ test "publish with properties" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    _ = try ch.queueDeclare("bunny-zig.test.props", .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
     try ch.confirmSelect();
 
     const props = BasicProperties.default
@@ -20,22 +21,18 @@ test "publish with properties" {
         .withCorrelationId("corr-001")
         .withAppId("bunny-zig-test");
 
-    try ch.publish("{\"key\": \"value\"}", .{
-        .routing_key = "bunny-zig.test.props",
-        .properties = props,
-    });
+    try queue.publish("{\"key\": \"value\"}", props);
     try testing.expect(try ch.waitForConfirms());
 
-    const result = try ch.basicGet("bunny-zig.test.props", .manual);
+    const result = try queue.get(.manual);
     try testing.expect(result != null);
-    var msg = result.?;
+    const msg = result.?;
     defer msg.deinit(h.test_allocator);
     try testing.expectEqualSlices(u8, "application/json", msg.properties.content_type.?);
     try testing.expectEqual(2, msg.properties.delivery_mode.?);
     try testing.expectEqualSlices(u8, "msg-001", msg.properties.message_id.?);
 
-    try ch.basicAck(msg.delivery_tag, false);
-    _ = try ch.queueDelete("bunny-zig.test.props");
+    try msg.ack();
 }
 
 test "persistent delivery_mode survives publish to consume roundtrip" {
@@ -46,19 +43,19 @@ test "persistent delivery_mode survives publish to consume roundtrip" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const q = "bunny-zig.test.persistent";
-    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
 
     try ch.confirmSelect();
-    try ch.publishToQueue(q, "durable payload", .{ .delivery_mode = 2 });
+    try queue.publish("durable payload", .{ .delivery_mode = 2 });
     _ = try ch.waitForConfirms();
 
-    const got = try h.pollBasicGet(ch, q);
+    const got = try h.pollBasicGet(ch, queue.name);
     try testing.expect(got != null);
-    var msg = got.?;
+    const msg = got.?;
     defer msg.deinit(h.test_allocator);
     try testing.expectEqual(@as(?u8, 2), msg.properties.delivery_mode);
-    try ch.basicAck(msg.delivery_tag, false);
+    try msg.ack();
 }
 
 test "basic properties round-trip through publish and basic.get" {
@@ -69,8 +66,8 @@ test "basic properties round-trip through publish and basic.get" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const q = "bunny-zig.test.props-roundtrip";
-    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
 
     const props = BasicProperties{
         .content_type = "application/json",
@@ -86,12 +83,12 @@ test "basic properties round-trip through publish and basic.get" {
     };
 
     try ch.confirmSelect();
-    try ch.publishToQueue(q, "props body", props);
+    try queue.publish("props body", props);
     _ = try ch.waitForConfirms();
 
-    const got_msg = try h.pollBasicGet(ch, q);
+    const got_msg = try h.pollBasicGet(ch, queue.name);
     try testing.expect(got_msg != null);
-    var msg = got_msg.?;
+    const msg = got_msg.?;
     defer msg.deinit(h.test_allocator);
     const got = msg.properties;
     try testing.expectEqualSlices(u8, "application/json", got.content_type.?);
@@ -105,5 +102,5 @@ test "basic properties round-trip through publish and basic.get" {
     try testing.expectEqual(@as(?u64, 1_700_000_000), got.timestamp);
     try testing.expectEqualSlices(u8, "bunny-zig-tests", got.app_id.?);
 
-    try ch.basicAck(msg.delivery_tag, false);
+    try msg.ack();
 }

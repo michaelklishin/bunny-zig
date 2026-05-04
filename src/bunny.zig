@@ -3,6 +3,7 @@
 /// Implements AMQP 0-9-1 with support for publisher confirms, consumer
 /// acknowledgements, exchange-to-exchange bindings, and all standard
 /// queue types (classic, quorum, stream).
+const std = @import("std");
 
 pub const protocol = @import("protocol.zig");
 pub const Connection = @import("connection.zig").Connection;
@@ -17,7 +18,7 @@ pub const Endpoint = @import("connection.zig").Endpoint;
 pub const AddressResolver = @import("connection.zig").AddressResolver;
 pub const Channel = @import("channel.zig").Channel;
 pub const Delivery = @import("channel.zig").Delivery;
-pub const GetResult = @import("channel.zig").GetResult;
+pub const BasicGetResult = @import("channel.zig").BasicGetResult;
 pub const ReturnedMessage = @import("channel.zig").ReturnedMessage;
 pub const ChannelCloseInfo = @import("channel.zig").ChannelCloseInfo;
 pub const replyCodeToError = @import("channel.zig").replyCodeToError;
@@ -54,9 +55,9 @@ pub const FieldValue = protocol.FieldValue;
 pub const correlation_id_len: usize = 16;
 
 /// Generate a random 16-character hex correlation ID by value. Useful for
-/// RPC clients that need a unique tag to match responses.
-pub fn correlationId(io: @import("std").Io) [correlation_id_len]u8 {
-    const std = @import("std");
+/// request-reply clients that need a unique tag to match responses against
+/// outstanding requests.
+pub fn correlationId(io: std.Io) [correlation_id_len]u8 {
     var bytes: [8]u8 = undefined;
     var src = std.Random.IoSource{ .io = io };
     src.interface().bytes(&bytes);
@@ -67,7 +68,7 @@ pub fn correlationId(io: @import("std").Io) [correlation_id_len]u8 {
 
 /// Write a random 16-character hex correlation ID into `buf` and return the
 /// slice. Returns `error.BufferTooSmall` if `buf.len < 16`.
-pub fn newCorrelationId(io: @import("std").Io, buf: []u8) error{BufferTooSmall}![]const u8 {
+pub fn newCorrelationId(io: std.Io, buf: []u8) error{BufferTooSmall}![]const u8 {
     if (buf.len < correlation_id_len) return error.BufferTooSmall;
     const id = correlationId(io);
     @memcpy(buf[0..correlation_id_len], &id);
@@ -75,12 +76,10 @@ pub fn newCorrelationId(io: @import("std").Io, buf: []u8) error{BufferTooSmall}!
 }
 
 test {
-    const std = @import("std");
     std.testing.refAllDecls(@This());
 }
 
 test "newCorrelationId fills buffer with 16 hex chars" {
-    const std = @import("std");
     const io = std.Io.Threaded.global_single_threaded.io();
     var buf: [16]u8 = undefined;
     const id = try newCorrelationId(io, &buf);
@@ -91,7 +90,6 @@ test "newCorrelationId fills buffer with 16 hex chars" {
 }
 
 test "newCorrelationId produces distinct IDs across calls" {
-    const std = @import("std");
     const io = std.Io.Threaded.global_single_threaded.io();
     var a: [16]u8 = undefined;
     var b: [16]u8 = undefined;
@@ -101,14 +99,12 @@ test "newCorrelationId produces distinct IDs across calls" {
 }
 
 test "newCorrelationId returns BufferTooSmall when buf is short" {
-    const std = @import("std");
     const io = std.Io.Threaded.global_single_threaded.io();
     var buf: [8]u8 = undefined;
     try std.testing.expectError(error.BufferTooSmall, newCorrelationId(io, &buf));
 }
 
 test "correlationId by-value variant returns 16 hex chars" {
-    const std = @import("std");
     const io = std.Io.Threaded.global_single_threaded.io();
     const id = correlationId(io);
     try std.testing.expectEqual(@as(usize, 16), id.len);

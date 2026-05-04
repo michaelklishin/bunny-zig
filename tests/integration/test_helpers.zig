@@ -54,7 +54,7 @@ pub const TestTimer = struct {
 };
 
 /// Poll basic.get until a message arrives or attempts are exhausted.
-pub fn pollBasicGet(ch: *bunny.Channel, queue: []const u8) !?bunny.GetResult {
+pub fn pollBasicGet(ch: *bunny.Channel, queue: []const u8) !?bunny.BasicGetResult {
     for (0..100) |_| {
         if (try ch.basicGet(queue, .manual)) |result| {
             return result;

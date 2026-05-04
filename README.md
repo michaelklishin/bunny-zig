@@ -80,7 +80,7 @@ pub fn main() !void {
     if (try ch.recvDelivery()) |delivery| {
         defer delivery.deinit(allocator);
         std.debug.print("Received: {s}\n", .{delivery.body});
-        try ch.basicAck(delivery.delivery_tag, false);
+        try delivery.ack();
     }
 }
 ```
@@ -191,16 +191,17 @@ std.debug.print("Temporary queue: {s}\n", .{tmp.name});
 ### Stream Queues
 
 ```zig
-_ = try ch.streamQueue("events");
+const events = try ch.streamQueue("events");
 
-// Consume from the beginning of the stream
+// Consume from the beginning of the stream. x-stream-offset is set on the
+// consumer's arguments table.
 const args = try bunny.FieldTable.fromEntries(allocator, &.{
     .{ .key = "x-stream-offset", .value = .{ .long_string = "first" } },
 });
 defer args.deinit();
 
-try ch.basicQos(100, false);
-_ = try ch.basicConsumeWithArgs("events", .manual, false, args);
+try ch.prefetch(100);
+_ = try ch.basicConsumeWithArgs(events.name, .manual, false, args);
 ```
 
 ### Queue Arguments Builder
@@ -310,17 +311,21 @@ for (0..10_000) |i| {
 ### Consuming Messages
 
 ```zig
-// global=false: per-consumer prefetch (each consumer gets its own window)
-// global=true:  channel-wide prefetch shared across all consumers
-try ch.basicQos(10, false);
+// Per-consumer prefetch. ch.basicQos(n, true), the channel-wide variant, is
+// denied by default starting with RabbitMQ 4.3.0 (the `global_qos` deprecated
+// feature is now denied by default).
+try ch.prefetch(10);
 
-// Auto-generated consumer tag (use `basicConsumeWithTag` for an explicit tag)
-_ = try ch.basicConsume("my-queue", .manual);
+const queue = try ch.queueDeclare("my-queue", .{ .durable = true });
+defer queue.deinit(allocator);
 
-// Receive deliveries (blocks until a message arrives)
+// Auto-generated consumer tag.
+_ = try queue.subscribe(.manual);
+
+// Receive deliveries (blocks until a message arrives).
 while (try ch.recvDelivery()) |delivery| {
-    std.debug.print("Received: {s}\n", .{delivery.bodyString()});
-    try ch.basicAck(delivery.delivery_tag, false);
+    std.debug.print("Received: {s}\n", .{delivery.body});
+    try delivery.ack();
 }
 ```
 
@@ -336,10 +341,16 @@ _ = try ch.basicConsumeWith("my-queue", .manual, &struct {
 
 ### Polling (basic.get)
 
+`basic.get` is a polling alternative to `basic.consume`. Prefer `basicConsume`
+or `Queue.subscribe` for production traffic.
+
 ```zig
-if (try ch.basicGet("my-queue", .manual)) |msg| {
+const queue = try ch.queueDeclare("my-queue", .{ .durable = true });
+defer queue.deinit(allocator);
+
+if (try queue.get(.manual)) |msg| {
     std.debug.print("Got: {s}\n", .{msg.body});
-    try ch.basicAck(msg.delivery_tag, false);
+    try msg.ack();
 } else {
     std.debug.print("Queue is empty\n", .{});
 }
@@ -348,34 +359,68 @@ if (try ch.basicGet("my-queue", .manual)) |msg| {
 ### Rejecting and Negative Acknowledgements
 
 ```zig
-// Reject a single message, requeue it
-try ch.basicReject(delivery.delivery_tag, true);
+// Drop or dead-letter
+try delivery.reject();
+try delivery.nack();
 
-// Nack with optional multiple and requeue
+// Retry: ask the broker to requeue
+try delivery.rejectRequeue();
+try delivery.nackRequeue();
+
+// Or call through the channel by tag
+try ch.reject(delivery.delivery_tag);
+try ch.nackRequeue(delivery.delivery_tag);
+
+// Lower-level access (multiple-flag, both flags) is still available
 try ch.basicNack(delivery.delivery_tag, false, true);
 ```
 
+### Consumer Safety
+
+`Delivery` and `BasicGetResult` borrow `*Channel` so the per-message helpers
+(`ack`, `nack`, `respond`, and the rest) can route on the originating channel
+without the caller threading it through. The borrow is valid for the
+connection's lifetime: calling those helpers after `Connection.deinit` is
+undefined behavior. Calling them on a channel that has been closed but not
+deinited returns `error.ChannelClosed`.
+
+Each `Delivery` and `BasicGetResult` owns the slice storage for its body,
+properties, and routing fields. Call `delivery.deinit(allocator)` when done,
+usually via `defer` immediately after the `recvDelivery` capture.
+
+In `.automatic` ack mode, RabbitMQ treats messages as acknowledged immediately
+after they are sent, so `ack`, `nack`, and `reject` should not be called. Consumer tags returned by
+`basicConsume*` are owned by the channel and stay valid until `basicCancel(tag)`
+or channel close; callers should not free them.
+
 ### Exchange Operations
 
-```zig
-// Declare exchanges
-try ch.declareDirectExchange("my.direct");
-try ch.declareFanoutExchange("my.fanout");
-try ch.declareTopicExchange("my.topic");
-try ch.declareHeadersExchange("my.headers");
+`declare*Exchange` and `exchangeDeclare` return an `Exchange` handle for
+convenient publishing and binding.
 
-// Custom exchange with options
-try ch.exchangeDeclare("my.custom", "x-consistent-hash", .{
+```zig
+const direct = try ch.declareDirectExchange("my.direct");
+const fanout = try ch.declareFanoutExchange("my.fanout");
+const topic = try ch.declareTopicExchange("my.topic");
+const headers = try ch.declareHeadersExchange("my.headers");
+
+// Publish via the handle: no need to repeat the exchange name.
+try direct.publish("payload", "routing.key", .{});
+
+// Custom type with options.
+const custom = try ch.exchangeDeclare("my.custom", "x-consistent-hash", .{
     .durable = true,
     .auto_delete = false,
 });
+_ = custom;
 
-// Delete an exchange
+// Delete an exchange.
 try ch.exchangeDelete("my.exchange");
 
-// Exchange-to-exchange binding (RabbitMQ extension)
+// Exchange-to-exchange binding (RabbitMQ extension).
 try ch.exchangeBind("destination", "source", "routing.key");
 try ch.exchangeUnbind("destination", "source", "routing.key");
+_ = .{ fanout, topic, headers };
 ```
 
 ### Queue and Exchange Handles
@@ -395,6 +440,12 @@ try ex.publish("payload", "routing.key", .{});
 ### Queue Binding
 
 ```zig
+const queue = try ch.queueDeclare("my-queue", .{ .durable = true });
+defer queue.deinit(allocator);
+try queue.bind("my-exchange", "routing.key.*");
+try queue.unbind("my-exchange", "routing.key.*");
+
+// Lower-level alternatives that take the queue name explicitly:
 try ch.queueBind("my-queue", "my-exchange", "routing.key.*");
 try ch.queueUnbind("my-queue", "my-exchange", "routing.key.*");
 ```
@@ -486,6 +537,31 @@ try ch.publish("msg1", .{ .routing_key = "q1" });
 try ch.publish("msg2", .{ .routing_key = "q2" });
 try ch.txCommit(); // or ch.txRollback()
 ```
+
+### Lower-Level Methods
+
+The high-level helpers above wrap thin AMQP method bindings. Reach for these
+when you need the raw flag set or a non-default combination:
+
+ * `Channel.basicAck(tag, multiple)`, `Channel.basicNack(tag, multiple, requeue)`,
+   and `Channel.basicReject(tag, requeue)` are the lower-level ack, nack, and
+   reject methods. For the common single-message cases prefer `Channel.ack`,
+   `Channel.nack`, `Channel.nackRequeue`, `Channel.reject`, `Channel.rejectRequeue`,
+   or `Channel.ackUpTo`, plus the `Delivery` and `BasicGetResult` mirrors
+ * `Channel.basicQos(prefetch_count, global)` is the lower-level QoS method.
+   `Channel.prefetch(n)` is the per-consumer alias. `global = true` is denied
+   by default starting with RabbitMQ 4.3.0
+ * `Channel.basicConsumeWithTagAndArgs(queue, tag, ack_mode, exclusive, args)`
+   is the lower-level consume method. Pass an empty `tag` for an auto-generated
+   one. Most callers want `Queue.subscribe` or `Channel.basicConsume`
+ * `Channel.exchangeDeclare(name, type, opts)` declares an exchange and returns
+   the `Exchange` handle. Type-specific helpers such as `declareDirectExchange`
+   wrap this with sensible defaults
+ * `Channel.queueDeclare(name, opts)` is the lower-level queue declaration
+   method. Convenience shorthands exist for the common cases: `quorumQueue`,
+   `streamQueue`, `durableQueue`, `temporaryQueue`, and `queueDeclarePassive`
+ * `Channel.publishAsync` and `Channel.publishBatch` are non-blocking publish
+   variants for the asynchronous-confirm and batch modes
 
 
 ## Building and Testing

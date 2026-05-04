@@ -10,20 +10,20 @@ test "publish and basic.get" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    _ = try ch.queueDeclare("bunny-zig.test.basic-get", .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
     try ch.confirmSelect();
 
-    try ch.publishToQueue("bunny-zig.test.basic-get", "Hello from bunny-zig!", BasicProperties.persistent);
+    try queue.publish("Hello from bunny-zig!", BasicProperties.persistent);
     try testing.expect(try ch.waitForConfirms());
 
-    const result = try ch.basicGet("bunny-zig.test.basic-get", .manual);
+    const result = try queue.get(.manual);
     try testing.expect(result != null);
-    var msg = result.?;
+    const msg = result.?;
     defer msg.deinit(h.test_allocator);
     try testing.expectEqualSlices(u8, "Hello from bunny-zig!", msg.body);
 
-    try ch.basicAck(msg.delivery_tag, false);
-    _ = try ch.queueDelete("bunny-zig.test.basic-get");
+    try msg.ack();
 }
 
 test "publish and consume with manual ack" {
@@ -33,19 +33,19 @@ test "publish and consume with manual ack" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    _ = try ch.queueDeclare("bunny-zig.test.consume", .{ .exclusive = true, .auto_delete = true });
-    _ = try ch.basicConsumeWithTag("bunny-zig.test.consume", "test-consumer", .manual);
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
+    _ = try queue.subscribeWithTag("test-consumer", .manual);
 
-    try ch.publishToQueue("bunny-zig.test.consume", "consumed message", .{});
+    try queue.publish("consumed message", .{});
 
     const delivery = try ch.recvDelivery();
     try testing.expect(delivery != null);
-    var msg = delivery.?;
+    const msg = delivery.?;
     defer msg.deinit(h.test_allocator);
     try testing.expectEqualSlices(u8, "consumed message", msg.body);
 
-    try ch.basicAck(msg.delivery_tag, false);
-    _ = try ch.queueDelete("bunny-zig.test.consume");
+    try msg.ack();
 }
 
 test "publish and consume empty body" {
@@ -55,20 +55,20 @@ test "publish and consume empty body" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    _ = try ch.queueDeclare("bunny-zig.test.empty-body", .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
     try ch.confirmSelect();
 
-    try ch.publishToQueue("bunny-zig.test.empty-body", "", .{});
+    try queue.publish("", .{});
     try testing.expect(try ch.waitForConfirms());
 
-    const got = try h.pollBasicGet(ch, "bunny-zig.test.empty-body");
+    const got = try h.pollBasicGet(ch, queue.name);
     try testing.expect(got != null);
-    var msg = got.?;
+    const msg = got.?;
     defer msg.deinit(h.test_allocator);
     try testing.expectEqual(0, msg.body.len);
 
-    try ch.basicAck(msg.delivery_tag, false);
-    _ = try ch.queueDelete("bunny-zig.test.empty-body");
+    try msg.ack();
 }
 
 test "publish to the default exchange routes by queue name" {
@@ -78,20 +78,20 @@ test "publish to the default exchange routes by queue name" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const q = "bunny-zig.test.default-exchange";
-    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
 
     try ch.confirmSelect();
     // The default exchange is named "" and routes by routing_key == queue name.
-    try ch.publish("via default exchange", .{ .exchange = "", .routing_key = q });
+    try ch.publish("via default exchange", .{ .exchange = "", .routing_key = queue.name });
     _ = try ch.waitForConfirms();
 
-    const got = try h.pollBasicGet(ch, q);
+    const got = try h.pollBasicGet(ch, queue.name);
     try testing.expect(got != null);
-    var msg = got.?;
+    const msg = got.?;
     defer msg.deinit(h.test_allocator);
     try testing.expectEqualSlices(u8, "via default exchange", msg.body);
-    try ch.basicAck(msg.delivery_tag, false);
+    try msg.ack();
 }
 
 test "publish multiple sequential messages preserves order" {
@@ -101,28 +101,28 @@ test "publish multiple sequential messages preserves order" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const q = "bunny-zig.test.fifo";
-    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
 
     try ch.confirmSelect();
     var i: u32 = 0;
     while (i < 5) : (i += 1) {
         var buf: [16]u8 = undefined;
         const body = std.fmt.bufPrint(&buf, "m{d}", .{i}) catch unreachable;
-        try ch.publishToQueue(q, body, .{});
+        try queue.publish(body, .{});
     }
     _ = try ch.waitForConfirms();
 
     var seen: u32 = 0;
     while (seen < 5) : (seen += 1) {
-        const got = try h.pollBasicGet(ch, q);
+        const got = try h.pollBasicGet(ch, queue.name);
         try testing.expect(got != null);
-        var m = got.?;
+        const m = got.?;
         defer m.deinit(h.test_allocator);
         var expected_buf: [16]u8 = undefined;
         const expected = std.fmt.bufPrint(&expected_buf, "m{d}", .{seen}) catch unreachable;
         try testing.expectEqualSlices(u8, expected, m.body);
-        try ch.basicAck(m.delivery_tag, false);
+        try m.ack();
     }
 }
 
@@ -133,31 +133,31 @@ test "publish and consume large message spanning multiple frames" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    _ = try ch.queueDeclare("bunny-zig.test.large-msg", .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
     try ch.confirmSelect();
 
-    // Build a message larger than the negotiated frame_max (typically 131072).
-    // This forces multi-frame body encoding.
+    // Build a message larger than the negotiated frame_max (typically 131072)
+    // to force multi-frame body encoding.
     const body_size = conn.negotiated_frame_max * 2;
     const body = try std.heap.page_allocator.alloc(u8, body_size);
     defer std.heap.page_allocator.free(body);
     @memset(body, 'A');
 
-    try ch.publishToQueue("bunny-zig.test.large-msg", body, .{});
+    try queue.publish(body, .{});
     try testing.expect(try ch.waitForConfirms());
 
-    _ = try ch.basicConsume("bunny-zig.test.large-msg", .manual);
+    _ = try queue.subscribe(.manual);
     const delivery = try ch.recvDelivery();
     try testing.expect(delivery != null);
-    var d = delivery.?;
+    const d = delivery.?;
     defer d.deinit(h.test_allocator);
     try testing.expectEqual(body_size, d.body.len);
     // Verify first and last bytes survived the multi-frame roundtrip.
     try testing.expectEqual('A', d.body[0]);
     try testing.expectEqual('A', d.body[body_size - 1]);
 
-    try ch.basicAck(d.delivery_tag, false);
-    _ = try ch.queueDelete("bunny-zig.test.large-msg");
+    try d.ack();
 }
 
 test "delivery tags are monotonically increasing within a channel" {
@@ -168,29 +168,29 @@ test "delivery tags are monotonically increasing within a channel" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    const q = "bunny-zig.test.delivery-tags";
-    _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
+    var queue = try ch.temporaryQueue();
+    defer queue.deinit(h.test_allocator);
 
     try ch.confirmSelect();
     const total: u32 = 100;
     for (0..total) |_| {
-        try ch.publishToQueue(q, "tag", .{});
+        try queue.publish("tag", .{});
     }
     _ = try ch.waitForConfirms();
 
-    _ = try ch.basicConsume(q, .manual);
+    _ = try queue.subscribe(.manual);
 
     var prev: u64 = 0;
     var seen: u32 = 0;
     while (seen < total) {
         const got = try ch.recvDelivery();
         try testing.expect(got != null);
-        var d = got.?;
+        const d = got.?;
         defer d.deinit(h.test_allocator);
         // Delivery tags within a channel are strictly increasing.
         try testing.expect(d.delivery_tag > prev);
         prev = d.delivery_tag;
-        try ch.basicAck(d.delivery_tag, false);
+        try d.ack();
         seen += 1;
     }
     try testing.expectEqual(total, seen);

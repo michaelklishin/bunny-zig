@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 const Channel = @import("channel.zig").Channel;
 const BasicProperties = @import("protocol.zig").properties.BasicProperties;
 const Delivery = @import("channel.zig").Delivery;
-const GetResult = @import("channel.zig").GetResult;
+const BasicGetResult = @import("channel.zig").BasicGetResult;
 const AckMode = @import("channel.zig").AckMode;
 
 pub const Queue = struct {
@@ -64,7 +64,7 @@ pub const Queue = struct {
         return self.channel.basicConsumeWithTagAndHandler(self.name, consumer_tag, ack_mode, handler);
     }
 
-    pub fn get(self: Queue, ack_mode: AckMode) !?GetResult {
+    pub fn get(self: Queue, ack_mode: AckMode) !?BasicGetResult {
         return self.channel.basicGet(self.name, ack_mode);
     }
 };

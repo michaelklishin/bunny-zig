@@ -137,8 +137,11 @@ test "work pool: dispatches items" {
     Handler.cnt = &counter;
 
     // Each submit consumes the delivery, build a fresh one per iteration.
+    // The handler does not call any channel-bound method, so leaving `channel`
+    // undefined is safe for this unit test.
     for (0..10) |_| {
         const d = Delivery{
+            .channel = undefined,
             .consumer_tag = try allocator.dupe(u8, ""),
             .delivery_tag = 0,
             .redelivered = false,

@@ -61,6 +61,26 @@ test "RPC after explicit close returns ChannelClosed" {
     try testing.expectError(error.ChannelClosed, result);
 }
 
+test "Channel.close() is the void/idempotent counterpart of closeChannel" {
+    const _t = h.TestTimer.start("Channel.close() is the void/idempotent counterpart of closeChannel");
+    defer _t.stop();
+    const conn = try h.openTestConnection();
+    defer conn.deinit();
+
+    const ch = try conn.openChannel();
+    try testing.expect(ch.isOpen());
+    ch.close();
+    try testing.expect(!ch.isOpen());
+
+    // Idempotent: a second close is a no-op and does not panic.
+    ch.close();
+    try testing.expect(!ch.isOpen());
+
+    // Subsequent RPCs surface the typed error.
+    const result = ch.queueDeclare("bunny-zig.test.after-void-close", .{ .exclusive = true, .auto_delete = true });
+    try testing.expectError(error.ChannelClosed, result);
+}
+
 test "channel-level error closes the channel but leaves connection open" {
     const _t = h.TestTimer.start("channel-level error closes the channel but leaves connection open");
     defer _t.stop();

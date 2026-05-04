@@ -56,7 +56,18 @@ const ConsumerWorkPool = @import("consumer_work_pool.zig").ConsumerWorkPool;
 const log = std.log.scoped(.bunny_channel);
 
 /// A delivered message. Owns its storage, call `deinit` when done.
+/// A message pushed to a consumer.
+///
+/// Borrows `*Channel` so `ack`, `nack`, `respond`, etc. route on the originating
+/// channel. The borrow is valid for the connection's lifetime; closing the
+/// channel alone makes per-message helpers return `error.ChannelClosed`,
+/// `Connection.deinit` invalidates outstanding `Delivery` values.
+///
+/// Owns `consumer_tag`, `exchange`, `routing_key`, `properties`, and `body`;
+/// caller must `deinit(allocator)`.
 pub const Delivery = struct {
+    /// Borrowed for the connection's lifetime. See struct-level note.
+    channel: *Channel,
     consumer_tag: []const u8,
     delivery_tag: u64,
     redelivered: bool,
@@ -64,10 +75,6 @@ pub const Delivery = struct {
     routing_key: []const u8,
     properties: BasicProperties,
     body: []const u8,
-
-    pub fn bodyString(self: Delivery) []const u8 {
-        return self.body;
-    }
 
     /// Free the storage owned by this delivery. By value so `defer raw.deinit(...)`
     /// works directly on a while-let capture without an intermediate `var`.
@@ -80,14 +87,46 @@ pub const Delivery = struct {
         if (self.body.len > 0) allocator.free(self.body);
     }
 
-    /// Reply to this RPC request via `ch`. See `Channel.respondTo`.
-    pub fn respond(self: Delivery, ch: *Channel, body: []const u8) !void {
-        return ch.respondTo(self, body);
+    /// Reply to this request-reply request. Publishes `body` to the default
+    /// exchange with `delivery.properties.reply_to` as the routing key and
+    /// propagates `delivery.properties.correlation_id`. See `Channel.respondTo`.
+    pub fn respond(self: Delivery, body: []const u8) !void {
+        return self.channel.respondTo(self, body);
+    }
+
+    /// Acknowledge this delivery on its originating channel.
+    pub fn ack(self: Delivery) !void {
+        return self.channel.ack(self.delivery_tag);
+    }
+
+    /// Negatively acknowledge this delivery without requeueing (drop or dead-letter).
+    pub fn nack(self: Delivery) !void {
+        return self.channel.nack(self.delivery_tag);
+    }
+
+    /// Negatively acknowledge this delivery and ask the broker to requeue it.
+    pub fn nackRequeue(self: Delivery) !void {
+        return self.channel.nackRequeue(self.delivery_tag);
+    }
+
+    /// Reject this delivery without requeueing.
+    pub fn reject(self: Delivery) !void {
+        return self.channel.reject(self.delivery_tag);
+    }
+
+    /// Reject this delivery and ask the broker to requeue it.
+    pub fn rejectRequeue(self: Delivery) !void {
+        return self.channel.rejectRequeue(self.delivery_tag);
     }
 };
 
-/// Result of basic.get. Owns its storage, call `deinit` when done.
-pub const GetResult = struct {
+/// Result of `basic.get` (polling alternative to `basic.consume`).
+///
+/// Same `*Channel` borrow contract as `Delivery`. Owns `exchange`,
+/// `routing_key`, `properties`, and `body`; caller must `deinit(allocator)`.
+pub const BasicGetResult = struct {
+    /// Borrowed for the connection's lifetime. See `Delivery`.
+    channel: *Channel,
     delivery_tag: u64,
     redelivered: bool,
     exchange: []const u8,
@@ -96,12 +135,37 @@ pub const GetResult = struct {
     properties: BasicProperties,
     body: []const u8,
 
-    pub fn deinit(self: GetResult, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: BasicGetResult, allocator: std.mem.Allocator) void {
         allocator.free(self.exchange);
         allocator.free(self.routing_key);
         var props = self.properties;
         props.deinitOwned(allocator);
         if (self.body.len > 0) allocator.free(self.body);
+    }
+
+    /// Acknowledge this delivery on its originating channel.
+    pub fn ack(self: BasicGetResult) !void {
+        return self.channel.ack(self.delivery_tag);
+    }
+
+    /// Negatively acknowledge this delivery without requeueing (drop or dead-letter).
+    pub fn nack(self: BasicGetResult) !void {
+        return self.channel.nack(self.delivery_tag);
+    }
+
+    /// Negatively acknowledge this delivery and ask the broker to requeue it.
+    pub fn nackRequeue(self: BasicGetResult) !void {
+        return self.channel.nackRequeue(self.delivery_tag);
+    }
+
+    /// Reject this delivery without requeueing.
+    pub fn reject(self: BasicGetResult) !void {
+        return self.channel.reject(self.delivery_tag);
+    }
+
+    /// Reject this delivery and ask the broker to requeue it.
+    pub fn rejectRequeue(self: BasicGetResult) !void {
+        return self.channel.rejectRequeue(self.delivery_tag);
     }
 };
 
@@ -114,11 +178,10 @@ pub const ChannelCloseInfo = struct {
     method_id: u16,
     initiated_by_server: bool,
 
-    pub fn deinit(self: *ChannelCloseInfo, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ChannelCloseInfo, allocator: std.mem.Allocator) void {
         // reply_text is a sentinel empty slice when the dupe at record time failed,
         // and that slice does not belong to `allocator`. Skip the free in that case.
         if (self.reply_text.len > 0) allocator.free(self.reply_text);
-        self.* = undefined;
     }
 };
 
@@ -270,8 +333,10 @@ pub const Channel = struct {
     on_return: ?*const fn (ReturnedMessage) void = null,
     on_cancel: ?*const fn ([]const u8) void = null,
 
-    // Callback-based consumers: tag -> handler
-    consumer_callbacks: std.StringHashMap(*const fn (Delivery) void) = undefined,
+    // All consumers registered on this channel. Keys are owned, duped from the
+    // broker's `basic.consume-ok` reply. Value is the optional callback for
+    // push-style consumers; null means deliveries go to the recvDelivery queue.
+    consumers: std.StringHashMap(?*const fn (Delivery) void) = undefined,
 
     // Channel event listeners
     event_listeners: events.EventListeners(ChannelEvent) = .{},
@@ -302,7 +367,7 @@ pub const Channel = struct {
             .connection = connection,
             .id = id,
             .confirm_promises = std.AutoHashMap(u64, *ConfirmPromise).init(allocator),
-            .consumer_callbacks = std.StringHashMap(*const fn (Delivery) void).init(allocator),
+            .consumers = std.StringHashMap(?*const fn (Delivery) void).init(allocator),
         };
         return ch;
     }
@@ -317,11 +382,11 @@ pub const Channel = struct {
         self.confirm_promises.deinit();
         for (self.promise_pool.items) |p| self.allocator.destroy(p);
         self.promise_pool.deinit(self.allocator);
-        var cb_it = self.consumer_callbacks.keyIterator();
+        var cb_it = self.consumers.keyIterator();
         while (cb_it.next()) |k| self.allocator.free(k.*);
-        self.consumer_callbacks.deinit();
+        self.consumers.deinit();
         self.event_listeners.deinit(self.allocator);
-        if (self.last_close) |*info| info.deinit(self.allocator);
+        if (self.last_close) |info| info.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -732,10 +797,11 @@ pub const Channel = struct {
         });
     }
 
-    /// Reply to an RPC request. Publishes `body` to the default exchange using
-    /// `delivery.properties.reply_to` as the routing key, and propagates
-    /// `delivery.properties.correlation_id` so the requester can match the
-    /// response. Returns `error.NoReplyTo` if the delivery has no reply_to set.
+    /// Reply to a request-reply request. Publishes `body` to the default
+    /// exchange using `delivery.properties.reply_to` as the routing key, and
+    /// propagates `delivery.properties.correlation_id` so the client can match
+    /// the response. Returns `error.NoReplyTo` if the delivery has no
+    /// `reply_to` set.
     pub fn respondTo(self: *Channel, delivery: Delivery, body: []const u8) !void {
         const reply_to = delivery.properties.reply_to orelse return error.NoReplyTo;
         var props = BasicProperties.default;
@@ -842,7 +908,26 @@ pub const Channel = struct {
         return self.basicConsumeWithTagAndArgs(queue, "", ack_mode, exclusive, arguments);
     }
 
+    /// Start consuming with an explicit consumer tag, exclusive flag, and arguments.
+    /// Pass an empty `consumer_tag` to let the broker generate one.
+    /// The returned tag is owned by the channel and stays valid until
+    /// `basicCancel(tag)` or channel close.
     pub fn basicConsumeWithTagAndArgs(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode, exclusive: bool, arguments: FieldTable) ![]const u8 {
+        return self.registerConsumer(queue, consumer_tag, ack_mode, exclusive, arguments, null);
+    }
+
+    /// Common path for all `basicConsume*` variants: send `basic.consume`,
+    /// dupe the broker-returned tag for stable lifetime, and register the
+    /// consumer (with optional callback) in the channel's consumers map.
+    fn registerConsumer(
+        self: *Channel,
+        queue: []const u8,
+        consumer_tag: []const u8,
+        ack_mode: AckMode,
+        exclusive: bool,
+        arguments: FieldTable,
+        handler: ?*const fn (Delivery) void,
+    ) ![]const u8 {
         try self.connection.sendMethod(self.id, .{ .basic_consume = .{
             .queue = queue,
             .consumer_tag = consumer_tag,
@@ -851,23 +936,28 @@ pub const Channel = struct {
             .arguments = arguments,
         } });
         const response = try self.awaitMethod();
-        return switch (response) {
-            .basic_consume_ok => |ok| blk: {
+        switch (response) {
+            .basic_consume_ok => |ok| {
+                // ok.consumer_tag aliases the response read buffer. Dupe so the
+                // returned slice (and the consumers-map key) outlive the next RPC.
+                const owned_tag = try self.allocator.dupe(u8, ok.consumer_tag);
+                errdefer self.allocator.free(owned_tag);
+                try self.consumers.put(owned_tag, handler);
                 const qos = self.recordedPrefetch();
                 self.connection.topology.recordConsumer(self.allocator, .{
                     .queue = queue,
-                    .consumer_tag = ok.consumer_tag,
+                    .consumer_tag = owned_tag,
                     .no_ack = ack_mode == .automatic,
                     .exclusive = exclusive,
                     .channel_id = self.id,
                     .prefetch_count = qos.count,
                     .prefetch_global = qos.global,
                 }) catch {};
-                break :blk ok.consumer_tag;
+                return owned_tag;
             },
             .channel_close => |cc| return self.handleChannelClose(cc),
-            else => error.ProtocolError,
-        };
+            else => return error.ProtocolError,
+        }
     }
 
     fn recordedPrefetch(self: *Channel) struct { count: u16, global: bool } {
@@ -885,13 +975,7 @@ pub const Channel = struct {
     /// Start consuming with a callback handler and an explicit consumer tag.
     /// The returned tag is owned by the channel and stays valid until cancellation.
     pub fn basicConsumeWithTagAndHandler(self: *Channel, queue: []const u8, consumer_tag: []const u8, ack_mode: AckMode, handler: *const fn (Delivery) void) ![]const u8 {
-        const tag = try self.basicConsumeWithTag(queue, consumer_tag, ack_mode);
-        // The broker-returned tag aliases the read buffer, which gets recycled.
-        // Dupe so the map key and the value returned to the caller stay valid.
-        const owned_tag = try self.allocator.dupe(u8, tag);
-        errdefer self.allocator.free(owned_tag);
-        try self.consumer_callbacks.put(owned_tag, handler);
-        return owned_tag;
+        return self.registerConsumer(queue, consumer_tag, ack_mode, false, FieldTable.empty, handler);
     }
 
     /// Cancel a consumer.
@@ -900,7 +984,7 @@ pub const Channel = struct {
         const response = try self.awaitMethod();
         switch (response) {
             .basic_cancel_ok => {
-                if (self.consumer_callbacks.fetchRemove(consumer_tag)) |kv| self.allocator.free(kv.key);
+                if (self.consumers.fetchRemove(consumer_tag)) |kv| self.allocator.free(kv.key);
             },
             .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
@@ -946,7 +1030,7 @@ pub const Channel = struct {
 
     /// Synchronous fetch (basic.get). Returns null if the queue is empty.
     /// The caller owns the result and must call `deinit`.
-    pub fn basicGet(self: *Channel, queue: []const u8, ack_mode: AckMode) !?GetResult {
+    pub fn basicGet(self: *Channel, queue: []const u8, ack_mode: AckMode) !?BasicGetResult {
         // Reset content state before sending to avoid races with the reader thread.
         self.rpc_mutex.lockUncancelable(getIo());
         self.get_ready = false;
@@ -968,6 +1052,7 @@ pub const Channel = struct {
                 errdefer a.free(routing_key);
                 const content = try self.takeOwnedGetContent();
                 return .{
+                    .channel = self,
                     .delivery_tag = ok.delivery_tag,
                     .redelivered = ok.redelivered,
                     .exchange = exchange,
@@ -987,6 +1072,38 @@ pub const Channel = struct {
     // Acknowledgements
     //
 
+    /// Acknowledge a single delivery. Convenience wrapper over `basicAck`.
+    pub fn ack(self: *Channel, delivery_tag: u64) !void {
+        return self.basicAck(delivery_tag, false);
+    }
+
+    /// Acknowledge all deliveries up to and including this delivery tag.
+    pub fn ackUpTo(self: *Channel, delivery_tag: u64) !void {
+        return self.basicAck(delivery_tag, true);
+    }
+
+    /// Negatively acknowledge a single delivery without requeueing
+    /// (drop or dead-letter). Convenience wrapper over `basicNack`.
+    pub fn nack(self: *Channel, delivery_tag: u64) !void {
+        return self.basicNack(delivery_tag, false, false);
+    }
+
+    /// Negatively acknowledge a single delivery and ask the broker to requeue it.
+    pub fn nackRequeue(self: *Channel, delivery_tag: u64) !void {
+        return self.basicNack(delivery_tag, false, true);
+    }
+
+    /// Reject a single delivery without requeueing (drop or dead-letter).
+    /// Convenience wrapper over `basicReject`.
+    pub fn reject(self: *Channel, delivery_tag: u64) !void {
+        return self.basicReject(delivery_tag, false);
+    }
+
+    /// Reject a single delivery and ask the broker to requeue it.
+    pub fn rejectRequeue(self: *Channel, delivery_tag: u64) !void {
+        return self.basicReject(delivery_tag, true);
+    }
+
     /// Acknowledge a delivery.
     pub fn basicAck(self: *Channel, delivery_tag: u64, multiple: bool) !void {
         try self.connection.sendMethod(self.id, .{ .basic_ack = .{
@@ -996,6 +1113,7 @@ pub const Channel = struct {
     }
 
     /// Acknowledge all deliveries up to and including this delivery tag.
+    /// Equivalent to `ackUpTo`; kept for callers that prefer the AMQP-method-style name.
     pub fn basicAckMultiple(self: *Channel, delivery_tag: u64) !void {
         return self.basicAck(delivery_tag, true);
     }
@@ -1015,19 +1133,6 @@ pub const Channel = struct {
             .delivery_tag = delivery_tag,
             .requeue = requeue,
         } });
-    }
-
-    /// Ask the broker to redeliver all unacknowledged messages on this channel.
-    /// requeue=true puts them back on the queue for any consumer; requeue=false
-    /// is not implemented by RabbitMQ and the broker closes the channel with 540.
-    pub fn basicRecover(self: *Channel, requeue: bool) !void {
-        try self.connection.sendMethod(self.id, .{ .basic_recover = .{ .requeue = requeue } });
-        const response = try self.awaitMethod();
-        switch (response) {
-            .basic_recover_ok => {},
-            .channel_close => |cc| return self.handleChannelClose(cc),
-            else => return error.ProtocolError,
-        }
     }
 
     //
@@ -1253,7 +1358,7 @@ pub const Channel = struct {
     }
 
     /// Process a publisher confirm from the server.
-    fn handleConfirm(self: *Channel, delivery_tag: u64, multiple: bool, ack: bool) void {
+    fn handleConfirm(self: *Channel, delivery_tag: u64, multiple: bool, acked: bool) void {
         const io = getIo();
         self.confirm_mutex.lockUncancelable(io);
 
@@ -1263,7 +1368,7 @@ pub const Channel = struct {
         }
 
         const start = if (multiple) prev_confirmed + 1 else delivery_tag;
-        const result: ConfirmPromise.ConfirmResult = if (ack) .acked else .nacked;
+        const result: ConfirmPromise.ConfirmResult = if (acked) .acked else .nacked;
         var resolved_count: u32 = 0;
 
         if (!multiple) {
@@ -1349,15 +1454,15 @@ pub const Channel = struct {
             .basic_return => {
                 self.pending_method = m;
             },
-            .basic_ack => |ack| {
-                self.handleConfirm(ack.delivery_tag, ack.multiple, true);
+            .basic_ack => |ack_method| {
+                self.handleConfirm(ack_method.delivery_tag, ack_method.multiple, true);
             },
-            .basic_nack => |nack| {
-                self.handleConfirm(nack.delivery_tag, nack.multiple, false);
+            .basic_nack => |nack_method| {
+                self.handleConfirm(nack_method.delivery_tag, nack_method.multiple, false);
             },
             .basic_cancel => |cancel| {
                 log.info("consumer cancelled by server on channel {d}", .{self.id});
-                if (self.consumer_callbacks.fetchRemove(cancel.consumer_tag)) |kv| self.allocator.free(kv.key);
+                if (self.consumers.fetchRemove(cancel.consumer_tag)) |kv| self.allocator.free(kv.key);
                 if (self.on_cancel) |cb| cb(cancel.consumer_tag);
                 self.event_listeners.emit(.{ .consumer_cancelled = cancel.consumer_tag });
             },
@@ -1418,20 +1523,24 @@ pub const Channel = struct {
         const owned_body = self.pending_body.toOwnedSlice(a) catch
             a.dupe(u8, body) catch return;
 
-        var delivery = buildOwnedDelivery(a, deliver, props, owned_body) catch {
+        var delivery = buildOwnedDelivery(self, a, deliver, props, owned_body) catch {
             a.free(owned_body);
             log.err("failed to allocate delivery", .{});
             return;
         };
 
-        if (self.consumer_callbacks.get(delivery.consumer_tag)) |cb| {
-            if (self.work_pool) |pool| {
-                pool.submit(cb, delivery);
-            } else {
-                cb(delivery);
-                delivery.deinit(a);
+        if (self.consumers.get(delivery.consumer_tag)) |maybe_cb| {
+            if (maybe_cb) |cb| {
+                if (self.work_pool) |pool| {
+                    pool.submit(cb, delivery);
+                } else {
+                    cb(delivery);
+                    delivery.deinit(a);
+                }
+                return;
             }
-            return;
+            // Registered consumer without a callback: fall through and queue the
+            // delivery for `recvDelivery`.
         }
         self.delivery_mutex.lockUncancelable(getIo());
         self.deliveries.append(a, delivery) catch {
@@ -1468,7 +1577,7 @@ pub const Channel = struct {
         self.rpc_mutex.unlock(getIo());
     }
 
-    fn buildOwnedDelivery(a: Allocator, deliver: anytype, props: BasicProperties, body: []const u8) !Delivery {
+    fn buildOwnedDelivery(channel: *Channel, a: Allocator, deliver: anytype, props: BasicProperties, body: []const u8) !Delivery {
         const consumer_tag = try a.dupe(u8, deliver.consumer_tag);
         errdefer a.free(consumer_tag);
         const exchange = try a.dupe(u8, deliver.exchange);
@@ -1478,6 +1587,7 @@ pub const Channel = struct {
         var owned_props = try props.deepCopy(a);
         errdefer owned_props.deinitOwned(a);
         return .{
+            .channel = channel,
             .consumer_tag = consumer_tag,
             .delivery_tag = deliver.delivery_tag,
             .redelivered = deliver.redelivered,
@@ -1587,7 +1697,7 @@ pub const Channel = struct {
         const io = getIo();
         self.close_info_mutex.lockUncancelable(io);
         defer self.close_info_mutex.unlock(io);
-        if (self.last_close) |*prev| prev.deinit(self.allocator);
+        if (self.last_close) |prev| prev.deinit(self.allocator);
         self.last_close = .{
             .reply_code = cc.reply_code,
             .reply_text = text,

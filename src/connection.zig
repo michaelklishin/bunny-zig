@@ -228,6 +228,9 @@ pub const Connection = struct {
     reader_exit: Io.Event = .unset,
     heartbeat_exit: Io.Event = .unset,
     should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Signaled when `should_stop` flips to true, to wake background threads
+    /// (heartbeat, reader sleeps) without each having to poll a fixed interval.
+    shutdown_signal: Notify = .init,
     // Monotonic nanosecond timestamp of the last frame received, for missed heartbeat detection
     last_frame_at: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     write_mutex: Mutex = .init,
@@ -549,6 +552,7 @@ pub const Connection = struct {
         // Stop heartbeat thread
         if (self.heartbeat_thread) |t| {
             self.should_stop.store(true, .release);
+            self.shutdown_signal.broadcast(getIo());
             t.join();
             self.heartbeat_thread = null;
             self.should_stop.store(false, .release);
@@ -871,17 +875,14 @@ pub const Connection = struct {
 
     fn heartbeatLoop(self: *Connection) void {
         defer self.heartbeat_exit.set(getIo());
+        const io = getIo();
         const interval_ns: u64 = @as(u64, self.negotiated_heartbeat) * std.time.ns_per_s / 2;
         const deadline_ns: u64 = @as(u64, self.negotiated_heartbeat) * std.time.ns_per_s * 2;
-        const check_interval: u64 = 500 * std.time.ns_per_ms;
         while (!self.should_stop.load(.acquire)) {
-            // Sleep in short intervals so we can exit quickly on shutdown
-            var elapsed: u64 = 0;
-            while (elapsed < interval_ns) {
-                if (self.should_stop.load(.acquire)) return;
-                getIo().sleep(.{ .nanoseconds = @intCast(check_interval) }, .boot) catch {};
-                elapsed += check_interval;
-            }
+            // Wait for the heartbeat interval or an early shutdown signal.
+            const expected = self.shutdown_signal.snapshot();
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = @intCast(interval_ns) }, .clock = .awake } };
+            self.shutdown_signal.waitTimeout(io, expected, timeout);
             if (self.should_stop.load(.acquire)) break;
 
             // Check for missed heartbeats: no frame received within 2x the interval
@@ -936,6 +937,9 @@ pub const Connection = struct {
     fn shutdown(self: *Connection) void {
         self.is_open.store(false, .release);
         self.should_stop.store(true, .release);
+        // Wake the heartbeat thread immediately so its `t.join()` below
+        // does not block until the next heartbeat interval elapses.
+        self.shutdown_signal.broadcast(getIo());
 
         // Shut down the socket to unblock the reader thread's blocking readv.
         // This makes readv return 0 (EOF) without closing the fd, avoiding
