@@ -1,4 +1,6 @@
 /// Queue handle: wraps a channel and queue name for convenient operations.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Channel = @import("channel.zig").Channel;
 const BasicProperties = @import("protocol.zig").properties.BasicProperties;
 const Delivery = @import("channel.zig").Delivery;
@@ -7,9 +9,20 @@ const AckMode = @import("channel.zig").AckMode;
 
 pub const Queue = struct {
     channel: *Channel,
+    /// For named queues, aliases the caller's `name`. For server-named queues,
+    /// duped from the broker response and freed by `deinit`.
     name: []const u8,
+    /// True when `name` was duped (server-named queues only).
+    owns_name: bool = false,
     message_count: u32,
     consumer_count: u32,
+
+    /// Free the broker-assigned name for server-named queues. Safe to call
+    /// even when the name is borrowed; only frees when the handle owns it.
+    pub fn deinit(self: *Queue, allocator: Allocator) void {
+        if (self.owns_name) allocator.free(self.name);
+        self.* = undefined;
+    }
 
     pub fn publish(self: Queue, body: []const u8, props: BasicProperties) !void {
         return self.channel.publishToQueue(self.name, body, props);

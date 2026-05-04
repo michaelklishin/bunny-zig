@@ -364,11 +364,17 @@ pub const Channel = struct {
     }
 
     /// Declare a queue and return a handle for convenient operations.
+    /// For named queues, `Queue.name` aliases the caller's `name`. For
+    /// server-named queues, the broker-assigned name is duped because
+    /// `info.name` aliases the response frame buffer; call `Queue.deinit`
+    /// to free it.
     pub fn declareQueueHandle(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !Queue {
         const info = try self.queueDeclare(name, opts);
+        const stable_name = if (name.len > 0) name else try self.allocator.dupe(u8, info.name);
         return .{
             .channel = self,
-            .name = info.name,
+            .name = stable_name,
+            .owns_name = name.len == 0,
             .message_count = info.message_count,
             .consumer_count = info.consumer_count,
         };

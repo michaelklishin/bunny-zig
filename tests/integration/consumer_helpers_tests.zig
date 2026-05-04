@@ -70,7 +70,8 @@ test "Queue.subscribe (auto tag) returns a server-generated consumer tag" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    const q = try ch.declareQueueHandle("bunny-zig.test.queue-subscribe-auto", .{ .exclusive = true, .auto_delete = true });
+    var q = try ch.declareQueueHandle("bunny-zig.test.queue-subscribe-auto", .{ .exclusive = true, .auto_delete = true });
+    defer q.deinit(h.test_allocator);
     const tag = try q.subscribe(.manual);
     try testing.expect(tag.len > 0);
 }
@@ -92,14 +93,15 @@ test "Queue.subscribeWith (auto tag) delivers via callback" {
     Hits.count.store(0, .release);
 
     const queue_name = "bunny-zig.test.queue-subscribe-with-auto";
-    const q = try ch.declareQueueHandle(queue_name, .{ .exclusive = true, .auto_delete = true });
+    var q = try ch.declareQueueHandle(queue_name, .{ .exclusive = true, .auto_delete = true });
+    defer q.deinit(h.test_allocator);
     const tag = try q.subscribeWith(.automatic, &Hits.handler);
     try testing.expect(tag.len > 0);
     // Let the callback register before the broker can deliver.
     h.sleepMs(50);
 
     try ch.confirmSelect();
-    // Publish via the stable name; `Queue.name` borrows from the response frame.
+    // Uses a well known name. Use `Queue.name` with server-named queues.
     try ch.publishToQueue(queue_name, "y", .{});
     _ = try ch.waitForConfirms();
 
@@ -116,7 +118,8 @@ test "Queue.subscribeWithTag honors the explicit tag" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    const q = try ch.declareQueueHandle("bunny-zig.test.queue-subscribe-with-tag", .{ .exclusive = true, .auto_delete = true });
+    var q = try ch.declareQueueHandle("bunny-zig.test.queue-subscribe-with-tag", .{ .exclusive = true, .auto_delete = true });
+    defer q.deinit(h.test_allocator);
     const tag = try q.subscribeWithTag("explicit-tag", .manual);
     try testing.expectEqualSlices(u8, "explicit-tag", tag);
 }
