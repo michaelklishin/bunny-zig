@@ -69,7 +69,7 @@ pub fn main() !void {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    var q = try ch.declareQueueHandle("hello", .{ .auto_delete = true });
+    var q = try ch.queueDeclare("hello", .{ .auto_delete = true });
     defer q.deinit(allocator);
 
     try ch.confirmSelect();
@@ -383,7 +383,7 @@ try ch.exchangeUnbind("destination", "source", "routing.key");
 
 ```zig
 // Declare and get a handle for convenient operations
-var q = try ch.declareQueueHandle("my-queue", .{ .durable = true });
+var q = try ch.queueDeclare("my-queue", .{ .durable = true });
 defer q.deinit(allocator);
 try q.publish("hello", .{});
 try q.bind("my-exchange", "routing.key");

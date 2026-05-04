@@ -44,7 +44,8 @@ test "declare a temporary queue" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    const info = try ch.temporaryQueue();
+    var info = try ch.temporaryQueue();
+    defer info.deinit(h.test_allocator);
     try testing.expect(info.name.len > 0);
 }
 
@@ -78,7 +79,8 @@ test "server-named queue: empty name returns a generated name" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    const info = try ch.queueDeclare("", .{ .exclusive = true, .auto_delete = true });
+    var info = try ch.queueDeclare("", .{ .exclusive = true, .auto_delete = true });
+    defer info.deinit(h.test_allocator);
     try testing.expect(info.name.len > 0);
     try testing.expect(std.mem.startsWith(u8, info.name, "amq."));
 }

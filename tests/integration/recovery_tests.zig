@@ -147,12 +147,9 @@ test "recovery: server-named queue is rebound using its new name" {
     // Server-named, non-exclusive, durable (transient non-exclusive queues are
     // disallowed since RabbitMQ 4.3.0). Recovery cannot replay exclusive queues,
     // so we explicitly opt out of exclusivity here.
-    const original = try ch.queueDeclare("", .{ .durable = true, .auto_delete = true });
-    // QueueInfo.name aliases the response frame buffer, which is freed after
-    // the call returns; copy it before any further protocol activity.
-    var original_name_buf: [128]u8 = undefined;
-    @memcpy(original_name_buf[0..original.name.len], original.name);
-    const original_name = original_name_buf[0..original.name.len];
+    var original = try ch.queueDeclare("", .{ .durable = true, .auto_delete = true });
+    defer original.deinit(h.test_allocator);
+    const original_name = original.name;
     try testing.expect(std.mem.startsWith(u8, original_name, "amq."));
 
     h.sleepMs(1200);
@@ -294,7 +291,8 @@ test "recovery: combined path, server-named queue plus consumer post-recovery de
     try conn.event_listeners.add(h.test_allocator, &Captured.handler);
 
     const ch = try conn.openChannel();
-    const original = try ch.queueDeclare("", .{ .durable = true, .auto_delete = true });
+    var original = try ch.queueDeclare("", .{ .durable = true, .auto_delete = true });
+    defer original.deinit(h.test_allocator);
     try testing.expect(std.mem.startsWith(u8, original.name, "amq."));
 
     h.sleepMs(1200);

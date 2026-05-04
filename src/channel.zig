@@ -77,6 +77,11 @@ pub const Delivery = struct {
         if (self.body.len > 0) allocator.free(self.body);
         self.* = undefined;
     }
+
+    /// Reply to this RPC request via `ch`. See `Channel.respondTo`.
+    pub fn respond(self: Delivery, ch: *Channel, body: []const u8) !void {
+        return ch.respondTo(self, body);
+    }
 };
 
 /// Result of basic.get. Owns its storage, call `deinit` when done.
@@ -96,13 +101,6 @@ pub const GetResult = struct {
         if (self.body.len > 0) allocator.free(self.body);
         self.* = undefined;
     }
-};
-
-/// Result of a queue.declare operation.
-pub const QueueInfo = struct {
-    name: []const u8,
-    message_count: u32,
-    consumer_count: u32,
 };
 
 /// Server-initiated channel.close details, surfaced after a typed error
@@ -329,8 +327,14 @@ pub const Channel = struct {
     // Queue operations
     //
 
-    /// Declare a queue. Returns queue info (name, message count, consumer count).
-    pub fn queueDeclare(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !QueueInfo {
+    /// Declare a queue and return a handle for subsequent operations.
+    ///
+    /// The returned `Queue` carries `name`, `message_count`, and
+    /// `consumer_count`. For caller-named queues the `name` aliases the
+    /// caller's slice and `deinit` is a no-op. For server-named queues
+    /// (empty `name`) the broker-assigned name is duped, and the caller
+    /// must call `Queue.deinit(allocator)` to release it.
+    pub fn queueDeclare(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !Queue {
         try self.connection.sendMethod(self.id, .{ .queue_declare = .{
             .queue = name,
             .passive = opts.passive,
@@ -352,8 +356,14 @@ pub const Channel = struct {
                     .channel_id = self.id,
                     .arguments = opts.arguments,
                 }) catch {};
+                // For server-named queues, ok.queue aliases the response frame
+                // buffer and is invalidated by the next RPC; dupe so the handle's
+                // name outlives subsequent calls.
+                const stable_name = if (name.len > 0) name else try self.allocator.dupe(u8, ok.queue);
                 break :blk .{
-                    .name = ok.queue,
+                    .channel = self,
+                    .name = stable_name,
+                    .owns_name = name.len == 0,
                     .message_count = ok.message_count,
                     .consumer_count = ok.consumer_count,
                 };
@@ -363,36 +373,19 @@ pub const Channel = struct {
         };
     }
 
-    /// Declare a queue and return a handle for convenient operations.
-    /// For named queues, `Queue.name` aliases the caller's `name`. For
-    /// server-named queues, the broker-assigned name is duped because
-    /// `info.name` aliases the response frame buffer; call `Queue.deinit`
-    /// to free it.
-    pub fn declareQueueHandle(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !Queue {
-        const info = try self.queueDeclare(name, opts);
-        const stable_name = if (name.len > 0) name else try self.allocator.dupe(u8, info.name);
-        return .{
-            .channel = self,
-            .name = stable_name,
-            .owns_name = name.len == 0,
-            .message_count = info.message_count,
-            .consumer_count = info.consumer_count,
-        };
-    }
-
     /// Declare a durable queue.
-    pub fn durableQueue(self: *Channel, name: []const u8) !QueueInfo {
+    pub fn durableQueue(self: *Channel, name: []const u8) !Queue {
         return self.queueDeclare(name, QueueDeclareOptions.durableQueue());
     }
 
     /// Assert a queue exists without modifying it. Closes the channel with
     /// NOT_FOUND (404) if the queue is missing.
-    pub fn queueDeclarePassive(self: *Channel, name: []const u8) !QueueInfo {
+    pub fn queueDeclarePassive(self: *Channel, name: []const u8) !Queue {
         return self.queueDeclare(name, .{ .passive = true });
     }
 
     /// Declare a quorum queue.
-    pub fn quorumQueue(self: *Channel, name: []const u8) !QueueInfo {
+    pub fn quorumQueue(self: *Channel, name: []const u8) !Queue {
         const entries = [_]FieldTable.Entry{
             .{ .key = "x-queue-type", .value = .{ .long_string = QueueType.quorum } },
         };
@@ -402,7 +395,7 @@ pub const Channel = struct {
     }
 
     /// Declare a stream queue.
-    pub fn streamQueue(self: *Channel, name: []const u8) !QueueInfo {
+    pub fn streamQueue(self: *Channel, name: []const u8) !Queue {
         const entries = [_]FieldTable.Entry{
             .{ .key = "x-queue-type", .value = .{ .long_string = QueueType.stream } },
         };
@@ -415,7 +408,7 @@ pub const Channel = struct {
     /// When opts.arguments is empty, x-queue-type is set automatically.
     /// When providing custom arguments via QueueArguments, include
     /// .queueType(allocator, "delayed-message") in the builder.
-    pub fn delayedQueue(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !QueueInfo {
+    pub fn delayedQueue(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !Queue {
         const entries = [_]FieldTable.Entry{
             .{ .key = "x-queue-type", .value = .{ .long_string = QueueType.delayed } },
         };
@@ -431,7 +424,7 @@ pub const Channel = struct {
 
     /// Declare a JMS queue (Tanzu RabbitMQ).
     /// Use QueueArguments for Tanzu-specific arguments like selectorFields.
-    pub fn jmsQueue(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !QueueInfo {
+    pub fn jmsQueue(self: *Channel, name: []const u8, opts: QueueDeclareOptions) !Queue {
         const entries = [_]FieldTable.Entry{
             .{ .key = "x-queue-type", .value = .{ .long_string = QueueType.jms } },
         };
@@ -456,7 +449,8 @@ pub const Channel = struct {
     }
 
     /// Declare a temporary (exclusive, auto-delete) queue with a server-generated name.
-    pub fn temporaryQueue(self: *Channel) !QueueInfo {
+    /// The returned `Queue` owns its name; call `Queue.deinit(allocator)` when done.
+    pub fn temporaryQueue(self: *Channel) !Queue {
         return self.queueDeclare("", QueueDeclareOptions.exclusiveQueue());
     }
 
@@ -740,6 +734,21 @@ pub const Channel = struct {
         });
     }
 
+    /// Reply to an RPC request. Publishes `body` to the default exchange using
+    /// `delivery.properties.reply_to` as the routing key, and propagates
+    /// `delivery.properties.correlation_id` so the requester can match the
+    /// response. Returns `error.NoReplyTo` if the delivery has no reply_to set.
+    pub fn respondTo(self: *Channel, delivery: Delivery, body: []const u8) !void {
+        const reply_to = delivery.properties.reply_to orelse return error.NoReplyTo;
+        var props = BasicProperties.default;
+        if (delivery.properties.correlation_id) |cid| props = props.withCorrelationId(cid);
+        return self.publish(body, .{
+            .exchange = "",
+            .routing_key = reply_to,
+            .properties = props,
+        });
+    }
+
     /// Publish a batch of messages to the same exchange and routing key.
     /// Use opts.flush to control whether to flush after the batch.
     pub fn publishBatch(
@@ -789,7 +798,15 @@ pub const Channel = struct {
     // Consuming
     //
 
-    /// Set QoS prefetch count.
+    /// Set per-consumer prefetch count, the common case for QoS.
+    /// Equivalent to `basicQos(n, false)`.
+    pub fn prefetch(self: *Channel, count: u16) !void {
+        return self.basicQos(count, false);
+    }
+
+    /// Set QoS prefetch count. Prefer `prefetch(n)` for the per-consumer case.
+    /// Note: `global = true` is denied by default starting with RabbitMQ 4.3.0
+    /// (the `global_qos` deprecated feature is now denied by default).
     pub fn basicQos(self: *Channel, prefetch_count: u16, global: bool) !void {
         try self.connection.sendMethod(self.id, .{ .basic_qos = .{
             .prefetch_count = prefetch_count,

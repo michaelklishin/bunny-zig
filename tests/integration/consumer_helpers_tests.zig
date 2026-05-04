@@ -70,7 +70,7 @@ test "Queue.subscribe (auto tag) returns a server-generated consumer tag" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    var q = try ch.declareQueueHandle("bunny-zig.test.queue-subscribe-auto", .{ .exclusive = true, .auto_delete = true });
+    var q = try ch.queueDeclare("bunny-zig.test.queue-subscribe-auto", .{ .exclusive = true, .auto_delete = true });
     defer q.deinit(h.test_allocator);
     const tag = try q.subscribe(.manual);
     try testing.expect(tag.len > 0);
@@ -93,7 +93,7 @@ test "Queue.subscribeWith (auto tag) delivers via callback" {
     Hits.count.store(0, .release);
 
     const queue_name = "bunny-zig.test.queue-subscribe-with-auto";
-    var q = try ch.declareQueueHandle(queue_name, .{ .exclusive = true, .auto_delete = true });
+    var q = try ch.queueDeclare(queue_name, .{ .exclusive = true, .auto_delete = true });
     defer q.deinit(h.test_allocator);
     const tag = try q.subscribeWith(.automatic, &Hits.handler);
     try testing.expect(tag.len > 0);
@@ -118,7 +118,7 @@ test "Queue.subscribeWithTag honors the explicit tag" {
     const ch = try conn.openChannel();
     defer ch.closeChannel() catch {};
 
-    var q = try ch.declareQueueHandle("bunny-zig.test.queue-subscribe-with-tag", .{ .exclusive = true, .auto_delete = true });
+    var q = try ch.queueDeclare("bunny-zig.test.queue-subscribe-with-tag", .{ .exclusive = true, .auto_delete = true });
     defer q.deinit(h.test_allocator);
     const tag = try q.subscribeWithTag("explicit-tag", .manual);
     try testing.expectEqualSlices(u8, "explicit-tag", tag);
