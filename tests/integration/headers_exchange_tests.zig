@@ -12,7 +12,7 @@ test "headers exchange routes when x-match=any matches a single header" {
     defer ch.close();
 
     const ex = "bunny-zig.test.headers-any";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.headers, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.headers, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     const q = "bunny-zig.test.headers-any.q";
@@ -52,7 +52,7 @@ test "headers exchange does not route when x-match=all is not satisfied" {
     defer ch.close();
 
     const ex = "bunny-zig.test.headers-all";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.headers, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.headers, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     const q_strict = "bunny-zig.test.headers-all.strict";
@@ -104,7 +104,7 @@ test "headers exchange routes when bound on heterogeneous header types" {
     defer ch.close();
 
     const ex = "bunny-zig.test.headers-types";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.headers, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.headers, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     const q = "bunny-zig.test.headers-types.q";

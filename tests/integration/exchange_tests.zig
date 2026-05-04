@@ -9,7 +9,7 @@ test "declare and delete a fanout exchange" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.declareFanout("bunny-zig.test.fanout");
+    _ = try ch.declareFanoutExchange("bunny-zig.test.fanout");
     try ch.exchangeDelete("bunny-zig.test.fanout");
 }
 
@@ -20,7 +20,7 @@ test "declare and delete a topic exchange" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.declareTopic("bunny-zig.test.topic");
+    _ = try ch.declareTopicExchange("bunny-zig.test.topic");
     try ch.exchangeDelete("bunny-zig.test.topic");
 }
 
@@ -31,7 +31,7 @@ test "declare and delete a direct exchange" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.declareDirect("bunny-zig.test.direct");
+    _ = try ch.declareDirectExchange("bunny-zig.test.direct");
     try ch.exchangeDelete("bunny-zig.test.direct");
 }
 
@@ -42,7 +42,7 @@ test "declare and delete a headers exchange" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.declareHeaders("bunny-zig.test.headers");
+    _ = try ch.declareHeadersExchange("bunny-zig.test.headers");
     try ch.exchangeDelete("bunny-zig.test.headers");
 }
 
@@ -53,7 +53,7 @@ test "passive declare of amq.direct succeeds" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.exchangeDeclare("amq.direct", "direct", .{ .passive = true });
+    _ = try ch.exchangeDeclare("amq.direct", "direct", .{ .passive = true });
 }
 
 test "passive declare of a missing exchange closes the channel" {
@@ -75,7 +75,7 @@ test "exchangeDeclarePassive convenience helper asserts a built-in exchange" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.exchangeDeclarePassive("amq.fanout");
+    _ = try ch.exchangeDeclarePassive("amq.fanout");
 }
 
 test "exchangeDeclarePassive on a missing exchange closes the channel" {
@@ -98,7 +98,7 @@ test "exchange.delete with if_unused=true fails when bindings exist" {
     defer ch.close();
 
     const ex = "bunny-zig.test.if-unused";
-    try ch.exchangeDeclare(ex, "direct", .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, "direct", .{ .auto_delete = true });
 
     const q = "bunny-zig.test.if-unused-q";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -122,9 +122,9 @@ test "exchange-to-exchange unbind stops routing across the binding" {
     // Cannot use auto_delete here: removing the dest -> src binding would
     // leave src bindingless and the broker would auto-delete it before the
     // second publish lands.
-    try ch.exchangeDeclare(src, "fanout", .{});
+    _ = try ch.exchangeDeclare(src, "fanout", .{});
     defer ch.exchangeDelete(src) catch {};
-    try ch.exchangeDeclare(dest, "fanout", .{});
+    _ = try ch.exchangeDeclare(dest, "fanout", .{});
     defer ch.exchangeDelete(dest) catch {};
 
     try ch.exchangeBind(dest, src, "");

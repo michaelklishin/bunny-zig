@@ -61,7 +61,7 @@ test "recovery: topology is replayed after reconnect" {
 
     // Declare topology
     _ = try ch.queueDeclare("bunny-zig.test.recovery-q", .{ .durable = true });
-    try ch.declareDirect("bunny-zig.test.recovery-ex");
+    _ = try ch.declareDirectExchange("bunny-zig.test.recovery-ex");
     try ch.queueBind("bunny-zig.test.recovery-q", "bunny-zig.test.recovery-ex", "test.key");
 
     h.sleepMs(1200);

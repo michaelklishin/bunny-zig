@@ -534,8 +534,9 @@ pub const Channel = struct {
     // Exchange operations
     //
 
-    /// Declare an exchange.
-    pub fn exchangeDeclare(self: *Channel, name: []const u8, exchange_type: []const u8, opts: ExchangeDeclareOptions) !void {
+    /// Declare an exchange and return a handle for subsequent operations.
+    /// The handle's `name` aliases the caller's slice; no allocation is owned.
+    pub fn exchangeDeclare(self: *Channel, name: []const u8, exchange_type: []const u8, opts: ExchangeDeclareOptions) !Exchange {
         try self.connection.sendMethod(self.id, .{ .exchange_declare = .{
             .exchange = name,
             .exchange_type = exchange_type,
@@ -557,43 +558,38 @@ pub const Channel = struct {
                     .channel_id = self.id,
                     .arguments = opts.arguments,
                 }) catch {};
+                return .{ .channel = self, .name = name };
             },
             .channel_close => |cc| return self.handleChannelClose(cc),
             else => return error.ProtocolError,
         }
     }
 
-    /// Declare a direct exchange.
-    pub fn declareDirect(self: *Channel, name: []const u8) !void {
+    /// Declare a durable direct exchange.
+    pub fn declareDirectExchange(self: *Channel, name: []const u8) !Exchange {
         return self.exchangeDeclare(name, ExchangeType.direct, ExchangeDeclareOptions.durableExchange());
     }
 
-    /// Declare a fanout exchange.
-    pub fn declareFanout(self: *Channel, name: []const u8) !void {
+    /// Declare a durable fanout exchange.
+    pub fn declareFanoutExchange(self: *Channel, name: []const u8) !Exchange {
         return self.exchangeDeclare(name, ExchangeType.fanout, ExchangeDeclareOptions.durableExchange());
     }
 
-    /// Declare a topic exchange.
-    pub fn declareTopic(self: *Channel, name: []const u8) !void {
+    /// Declare a durable topic exchange.
+    pub fn declareTopicExchange(self: *Channel, name: []const u8) !Exchange {
         return self.exchangeDeclare(name, ExchangeType.topic, ExchangeDeclareOptions.durableExchange());
     }
 
-    /// Declare a headers exchange.
-    pub fn declareHeaders(self: *Channel, name: []const u8) !void {
+    /// Declare a durable headers exchange.
+    pub fn declareHeadersExchange(self: *Channel, name: []const u8) !Exchange {
         return self.exchangeDeclare(name, ExchangeType.headers, ExchangeDeclareOptions.durableExchange());
     }
 
     /// Assert an exchange exists without modifying it. Closes the channel with
     /// NOT_FOUND (404) if the exchange is missing. The exchange_type argument is
     /// sent for protocol completeness but is ignored by the broker for passive declares.
-    pub fn exchangeDeclarePassive(self: *Channel, name: []const u8) !void {
+    pub fn exchangeDeclarePassive(self: *Channel, name: []const u8) !Exchange {
         return self.exchangeDeclare(name, ExchangeType.direct, .{ .passive = true });
-    }
-
-    /// Declare an exchange and return a handle for convenient operations.
-    pub fn declareExchangeHandle(self: *Channel, name: []const u8, exchange_type: []const u8, opts: ExchangeDeclareOptions) !Exchange {
-        try self.exchangeDeclare(name, exchange_type, opts);
-        return .{ .channel = self, .name = name };
     }
 
     /// Delete an exchange.

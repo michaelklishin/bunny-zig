@@ -12,7 +12,7 @@ test "alternate-exchange catches messages that would otherwise be unrouted" {
     defer ch.close();
 
     const ae = "bunny-zig.test.ae.alternate";
-    try ch.exchangeDeclare(ae, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ae, bunny.ExchangeType.fanout, .{ .auto_delete = true });
     defer ch.exchangeDelete(ae) catch {};
 
     const ae_q = "bunny-zig.test.ae.catchall";
@@ -26,7 +26,7 @@ test "alternate-exchange catches messages that would otherwise be unrouted" {
     const args: bunny.FieldTable = .{ .entries = &ex_args, .allocator = undefined };
 
     const primary = "bunny-zig.test.ae.primary";
-    try ch.exchangeDeclare(primary, bunny.ExchangeType.direct, .{ .auto_delete = true, .arguments = args });
+    _ = try ch.exchangeDeclare(primary, bunny.ExchangeType.direct, .{ .auto_delete = true, .arguments = args });
     defer ch.exchangeDelete(primary) catch {};
 
     try ch.confirmSelect();

@@ -12,7 +12,7 @@ test "dead-letter exchange receives rejected messages" {
     defer ch.close();
 
     const dlx = "bunny-zig.test.dlx";
-    try ch.exchangeDeclare(dlx, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(dlx, bunny.ExchangeType.fanout, .{ .auto_delete = true });
     defer ch.exchangeDelete(dlx) catch {};
 
     const dlq = "bunny-zig.test.dlx.dlq";
@@ -58,7 +58,7 @@ test "dead-letter exchange respects x-dead-letter-routing-key override" {
     defer ch.close();
 
     const dlx = "bunny-zig.test.dlx-routed";
-    try ch.exchangeDeclare(dlx, bunny.ExchangeType.direct, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(dlx, bunny.ExchangeType.direct, .{ .auto_delete = true });
     defer ch.exchangeDelete(dlx) catch {};
 
     const dlq = "bunny-zig.test.dlx-routed.dlq";
@@ -109,9 +109,9 @@ test "x-death header is bounded by distinct (queue, reason) pairs across cycles"
     // appending a new one each cycle.
     const ex_a = "bunny-zig.test.x-death.ex-a";
     const ex_b = "bunny-zig.test.x-death.ex-b";
-    try ch.exchangeDeclare(ex_a, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex_a, bunny.ExchangeType.fanout, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex_a) catch {};
-    try ch.exchangeDeclare(ex_b, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex_b, bunny.ExchangeType.fanout, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex_b) catch {};
 
     var qa_a = bunny.QueueArguments{};

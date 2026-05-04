@@ -359,10 +359,10 @@ try ch.basicNack(delivery.delivery_tag, false, true);
 
 ```zig
 // Declare exchanges
-try ch.declareDirect("my.direct");
-try ch.declareFanout("my.fanout");
-try ch.declareTopic("my.topic");
-try ch.declareHeaders("my.headers");
+try ch.declareDirectExchange("my.direct");
+try ch.declareFanoutExchange("my.fanout");
+try ch.declareTopicExchange("my.topic");
+try ch.declareHeadersExchange("my.headers");
 
 // Custom exchange with options
 try ch.exchangeDeclare("my.custom", "x-consistent-hash", .{
@@ -388,7 +388,7 @@ try q.publish("hello", .{});
 try q.bind("my-exchange", "routing.key");
 _ = try q.purge();
 
-const ex = try ch.declareExchangeHandle("my-exchange", "topic", .{ .durable = true });
+const ex = try ch.exchangeDeclare("my-exchange", "topic", .{ .durable = true });
 try ex.publish("payload", "routing.key", .{});
 ```
 
@@ -402,7 +402,7 @@ try ch.queueUnbind("my-queue", "my-exchange", "routing.key.*");
 ### Headers Exchange
 
 ```zig
-try ch.declareHeaders("orders.headers");
+try ch.declareHeadersExchange("orders.headers");
 _ = try ch.queueDeclare("orders.eu", .{ .auto_delete = true });
 
 // Bind with x-match=all so every header pair must match

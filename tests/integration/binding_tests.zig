@@ -10,7 +10,7 @@ test "bind and unbind a queue" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.declareDirect("bunny-zig.test.bind-exchange");
+    _ = try ch.declareDirectExchange("bunny-zig.test.bind-exchange");
     _ = try ch.queueDeclare("bunny-zig.test.bind-queue", .{ .exclusive = true, .auto_delete = true });
 
     try ch.queueBind("bunny-zig.test.bind-queue", "bunny-zig.test.bind-exchange", "test.key");
@@ -27,8 +27,8 @@ test "exchange-to-exchange binding" {
     const ch = try conn.openChannel();
     defer ch.close();
 
-    try ch.declareFanout("bunny-zig.test.e2e-source");
-    try ch.declareFanout("bunny-zig.test.e2e-dest");
+    _ = try ch.declareFanoutExchange("bunny-zig.test.e2e-source");
+    _ = try ch.declareFanoutExchange("bunny-zig.test.e2e-dest");
 
     try ch.exchangeBind("bunny-zig.test.e2e-dest", "bunny-zig.test.e2e-source", "");
     try ch.exchangeUnbind("bunny-zig.test.e2e-dest", "bunny-zig.test.e2e-source", "");
@@ -47,8 +47,8 @@ test "auto-delete source exchange is removed when its last binding goes away" {
 
     const src = "bunny-zig.test.auto-delete-source";
     const dst = "bunny-zig.test.auto-delete-dest";
-    try ch.exchangeDeclare(src, bunny.ExchangeType.fanout, .{ .auto_delete = true });
-    try ch.exchangeDeclare(dst, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(src, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(dst, bunny.ExchangeType.fanout, .{ .auto_delete = true });
     defer ch.exchangeDelete(dst) catch {};
 
     try ch.exchangeBind(dst, src, "");

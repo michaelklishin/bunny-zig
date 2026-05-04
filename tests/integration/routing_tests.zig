@@ -21,7 +21,7 @@ test "publish with mandatory: returned and routable messages are both confirmed"
     defer ch.close();
 
     const ex = "bunny-zig.test.mandatory-with-confirms";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     const q = "bunny-zig.test.mandatory-with-confirms.q";
@@ -73,7 +73,7 @@ test "publish with mandatory: unroutable message triggers basic.return" {
     defer ch.close();
 
     const ex = "bunny-zig.test.mandatory-fanout";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.fanout, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.fanout, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     ch.on_return = &Counter.handler;
@@ -99,7 +99,7 @@ test "sender-selected distribution: CC header adds extra routing keys" {
     defer ch.close();
 
     const ex = "bunny-zig.test.ssd-direct";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     const q_primary = "bunny-zig.test.ssd.primary";
@@ -148,7 +148,7 @@ test "sender-selected distribution: BCC header routes but is stripped from deliv
     defer ch.close();
 
     const ex = "bunny-zig.test.ssd-bcc";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     const q_primary = "bunny-zig.test.ssd-bcc.primary";
@@ -209,7 +209,7 @@ test "topic exchange routes by wildcard patterns" {
     defer ch.close();
 
     const ex = "bunny-zig.test.topic-wildcards";
-    try ch.exchangeDeclare(ex, bunny.ExchangeType.topic, .{ .auto_delete = true });
+    _ = try ch.exchangeDeclare(ex, bunny.ExchangeType.topic, .{ .auto_delete = true });
     defer ch.exchangeDelete(ex) catch {};
 
     const q_star = "bunny-zig.test.topic-wildcards.star";
