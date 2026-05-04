@@ -8,7 +8,7 @@ test "basic.ack with multiple=true acknowledges every preceding delivery" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.ack-multiple";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -43,7 +43,7 @@ test "basic.nack with multiple=true and requeue redelivers every preceding messa
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.nack-multiple";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -83,7 +83,7 @@ test "basic.ack with an unknown delivery tag closes the channel" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.bad-ack";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

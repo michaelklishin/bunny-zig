@@ -67,7 +67,7 @@ pub fn main() !void {
     defer conn.deinit();
 
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var q = try ch.queueDeclare("hello", .{ .auto_delete = true });
     defer q.deinit(allocator);
@@ -77,11 +77,10 @@ pub fn main() !void {
     _ = try ch.waitForConfirms();
 
     _ = try q.subscribe(.manual);
-    if (try ch.recvDelivery()) |raw| {
-        var msg = raw;
-        defer msg.deinit(allocator);
-        std.debug.print("Received: {s}\n", .{msg.body});
-        try ch.basicAck(msg.delivery_tag, false);
+    if (try ch.recvDelivery()) |delivery| {
+        defer delivery.deinit(allocator);
+        std.debug.print("Received: {s}\n", .{delivery.body});
+        try ch.basicAck(delivery.delivery_tag, false);
     }
 }
 ```

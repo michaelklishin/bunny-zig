@@ -8,9 +8,9 @@ test "two consumers on the same queue" {
     defer conn.deinit();
 
     const ch1 = try conn.openChannel();
-    defer ch1.closeChannel() catch {};
+    defer ch1.close();
     const ch2 = try conn.openChannel();
-    defer ch2.closeChannel() catch {};
+    defer ch2.close();
 
     _ = try ch1.queueDeclare("bunny-zig.test.two-consumers", .{ .exclusive = true, .auto_delete = true });
 
@@ -55,7 +55,7 @@ test "consume with automatic ack does not require manual acknowledgement" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.auto-ack";
     _ = try ch.queueDeclare(q, .{ .durable = true });
@@ -84,7 +84,7 @@ test "consume returns the consumer tag the client supplied" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.consumer-tag";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -99,7 +99,7 @@ test "client-initiated basic.cancel stops further deliveries" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.client-cancel";
     _ = try ch.queueDeclare(q, .{ .durable = true });
@@ -154,9 +154,9 @@ test "server-initiated basic.cancel fires when queue is deleted" {
     defer conn.deinit();
 
     const ch_consume = try conn.openChannel();
-    defer ch_consume.closeChannel() catch {};
+    defer ch_consume.close();
     const ch_admin = try conn.openChannel();
-    defer ch_admin.closeChannel() catch {};
+    defer ch_admin.close();
 
     const q = "bunny-zig.test.server-cancel";
     // Exclusive queues are scoped to the connection, so a second channel on the
@@ -178,7 +178,7 @@ test "client-initiated basic.cancel for an unknown consumer tag is silently acce
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     // RabbitMQ returns basic.cancel-ok for unknown consumer tags without raising
     // a channel exception, matching the behavior other clients rely on.
@@ -192,7 +192,7 @@ test "client-initiated basic.cancel does not requeue unacknowledged messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.cancel-no-requeue";
     // Durable, not auto_delete: cancelling the consumer would auto-delete an
@@ -228,9 +228,9 @@ test "single-active-consumer: only one consumer receives messages at a time" {
     defer conn.deinit();
 
     const ch1 = try conn.openChannel();
-    defer ch1.closeChannel() catch {};
+    defer ch1.close();
     const ch2 = try conn.openChannel();
-    defer ch2.closeChannel() catch {};
+    defer ch2.close();
 
     const bunny = @import("bunny");
     var entries = [_]bunny.FieldTable.Entry{

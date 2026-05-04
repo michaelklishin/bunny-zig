@@ -13,7 +13,7 @@ test "Channel.basicConsumeWith (auto tag) delivers via callback" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const Hits = struct {
         var count: std.atomic.Value(u32) = .init(0);
@@ -44,7 +44,7 @@ test "Channel.basicConsumeWithArgs (auto tag) accepts custom arguments" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.streamQueue("bunny-zig.test.consume-args-auto-tag");
     defer _ = ch.queueDelete("bunny-zig.test.consume-args-auto-tag") catch {};
@@ -68,7 +68,7 @@ test "Queue.subscribe (auto tag) returns a server-generated consumer tag" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var q = try ch.queueDeclare("bunny-zig.test.queue-subscribe-auto", .{ .exclusive = true, .auto_delete = true });
     defer q.deinit(h.test_allocator);
@@ -82,7 +82,7 @@ test "Queue.subscribeWith (auto tag) delivers via callback" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const Hits = struct {
         var count: std.atomic.Value(u32) = .init(0);
@@ -116,7 +116,7 @@ test "Queue.subscribeWithTag honors the explicit tag" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var q = try ch.queueDeclare("bunny-zig.test.queue-subscribe-with-tag", .{ .exclusive = true, .auto_delete = true });
     defer q.deinit(h.test_allocator);

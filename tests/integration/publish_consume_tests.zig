@@ -8,7 +8,7 @@ test "publish and basic.get" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.basic-get", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
@@ -31,7 +31,7 @@ test "publish and consume with manual ack" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.consume", .{ .exclusive = true, .auto_delete = true });
     _ = try ch.basicConsumeWithTag("bunny-zig.test.consume", "test-consumer", .manual);
@@ -53,7 +53,7 @@ test "publish and consume empty body" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.empty-body", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
@@ -76,7 +76,7 @@ test "publish to the default exchange routes by queue name" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.default-exchange";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -99,7 +99,7 @@ test "publish multiple sequential messages preserves order" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.fifo";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -131,7 +131,7 @@ test "publish and consume large message spanning multiple frames" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.large-msg", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
@@ -166,7 +166,7 @@ test "delivery tags are monotonically increasing within a channel" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.delivery-tags";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

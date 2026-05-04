@@ -8,7 +8,7 @@ test "exclusive queue is locked from another connection" {
     const owner = try h.openTestConnection();
     defer owner.deinit();
     const owner_ch = try owner.openChannel();
-    defer owner_ch.closeChannel() catch {};
+    defer owner_ch.close();
 
     const q = "bunny-zig.test.exclusive-cross-conn";
     _ = try owner_ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -16,7 +16,7 @@ test "exclusive queue is locked from another connection" {
     const other = try h.openTestConnection();
     defer other.deinit();
     const other_ch = try other.openChannel();
-    defer other_ch.closeChannel() catch {};
+    defer other_ch.close();
 
     // Touching an exclusive queue from another connection raises RESOURCE_LOCKED (405).
     const result = other_ch.basicConsume(q, .manual);

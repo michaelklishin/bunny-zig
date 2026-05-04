@@ -43,7 +43,7 @@ test "connection.blocked and connection.unblocked notifications fire" {
 
     // The broker only sends blocked once a publish triggers the credit check.
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
     try ch.publish("trigger", .{ .routing_key = "bunny-zig.test.blocked-trigger" });
 
     var attempts: u32 = 0;

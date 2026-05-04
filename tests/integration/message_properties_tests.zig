@@ -8,7 +8,7 @@ test "publish with properties" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.props", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
@@ -44,7 +44,7 @@ test "persistent delivery_mode survives publish to consume roundtrip" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.persistent";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -67,7 +67,7 @@ test "basic properties round-trip through publish and basic.get" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.props-roundtrip";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

@@ -7,7 +7,7 @@ test "declare and delete a fanout exchange" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.declareFanout("bunny-zig.test.fanout");
     try ch.exchangeDelete("bunny-zig.test.fanout");
@@ -18,7 +18,7 @@ test "declare and delete a topic exchange" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.declareTopic("bunny-zig.test.topic");
     try ch.exchangeDelete("bunny-zig.test.topic");
@@ -29,7 +29,7 @@ test "declare and delete a direct exchange" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.declareDirect("bunny-zig.test.direct");
     try ch.exchangeDelete("bunny-zig.test.direct");
@@ -40,7 +40,7 @@ test "declare and delete a headers exchange" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.declareHeaders("bunny-zig.test.headers");
     try ch.exchangeDelete("bunny-zig.test.headers");
@@ -51,7 +51,7 @@ test "passive declare of amq.direct succeeds" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.exchangeDeclare("amq.direct", "direct", .{ .passive = true });
 }
@@ -61,7 +61,7 @@ test "passive declare of a missing exchange closes the channel" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.exchangeDeclare("bunny-zig.test.no-such-exchange", "direct", .{ .passive = true });
     try testing.expectError(error.NotFound, result);
@@ -73,7 +73,7 @@ test "exchangeDeclarePassive convenience helper asserts a built-in exchange" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.exchangeDeclarePassive("amq.fanout");
 }
@@ -83,7 +83,7 @@ test "exchangeDeclarePassive on a missing exchange closes the channel" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.exchangeDeclarePassive("bunny-zig.test.passive-helper-no-such-exchange");
     try testing.expectError(error.NotFound, result);
@@ -95,7 +95,7 @@ test "exchange.delete with if_unused=true fails when bindings exist" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const ex = "bunny-zig.test.if-unused";
     try ch.exchangeDeclare(ex, "direct", .{ .auto_delete = true });
@@ -115,7 +115,7 @@ test "exchange-to-exchange unbind stops routing across the binding" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const src = "bunny-zig.test.e2e-unbind-src";
     const dest = "bunny-zig.test.e2e-unbind-dest";
@@ -160,7 +160,7 @@ test "publishing to a predeclared amq.fanout exchange routes to bound queue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.amq-fanout";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

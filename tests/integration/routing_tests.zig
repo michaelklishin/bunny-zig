@@ -18,7 +18,7 @@ test "publish with mandatory: returned and routable messages are both confirmed"
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const ex = "bunny-zig.test.mandatory-with-confirms";
     try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
@@ -70,7 +70,7 @@ test "publish with mandatory: unroutable message triggers basic.return" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const ex = "bunny-zig.test.mandatory-fanout";
     try ch.exchangeDeclare(ex, bunny.ExchangeType.fanout, .{ .auto_delete = true });
@@ -96,7 +96,7 @@ test "sender-selected distribution: CC header adds extra routing keys" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const ex = "bunny-zig.test.ssd-direct";
     try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
@@ -145,7 +145,7 @@ test "sender-selected distribution: BCC header routes but is stripped from deliv
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const ex = "bunny-zig.test.ssd-bcc";
     try ch.exchangeDeclare(ex, bunny.ExchangeType.direct, .{ .auto_delete = true });
@@ -206,7 +206,7 @@ test "topic exchange routes by wildcard patterns" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const ex = "bunny-zig.test.topic-wildcards";
     try ch.exchangeDeclare(ex, bunny.ExchangeType.topic, .{ .auto_delete = true });

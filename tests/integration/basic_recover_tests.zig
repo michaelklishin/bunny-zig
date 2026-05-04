@@ -8,7 +8,7 @@ test "basic.recover with requeue=true redelivers unacknowledged messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.recover-requeue";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -51,7 +51,7 @@ test "basic.recover with auto-ack does nothing because nothing is unacked" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.recover-autoack";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

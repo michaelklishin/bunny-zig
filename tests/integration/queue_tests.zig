@@ -7,7 +7,7 @@ fn cleanupQueue(queue_name: []const u8) void {
     const conn = h.openTestConnection() catch return;
     defer conn.deinit();
     const ch = conn.openChannel() catch return;
-    defer ch.closeChannel() catch {};
+    defer ch.close();
     _ = ch.queueDelete(queue_name) catch {};
 }
 
@@ -16,7 +16,7 @@ test "declare and delete a queue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const info = try ch.queueDeclare("bunny-zig.test.declare-delete", .{ .exclusive = true, .auto_delete = true });
     try testing.expectEqualSlices(u8, "bunny-zig.test.declare-delete", info.name);
@@ -29,7 +29,7 @@ test "declare a durable queue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const info = try ch.durableQueue("bunny-zig.test.durable");
     try testing.expectEqualSlices(u8, "bunny-zig.test.durable", info.name);
@@ -42,7 +42,7 @@ test "declare a temporary queue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var info = try ch.temporaryQueue();
     defer info.deinit(h.test_allocator);
@@ -54,7 +54,7 @@ test "queue purge" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.purge", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
@@ -77,7 +77,7 @@ test "server-named queue: empty name returns a generated name" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var info = try ch.queueDeclare("", .{ .exclusive = true, .auto_delete = true });
     defer info.deinit(h.test_allocator);
@@ -90,7 +90,7 @@ test "passive declare of an existing queue returns its info" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.passive-existing";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -109,7 +109,7 @@ test "passive declare of a missing queue closes the channel" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.queueDeclare("bunny-zig.test.passive-missing", .{ .passive = true });
     try testing.expectError(error.NotFound, result);
@@ -121,7 +121,7 @@ test "queueDeclarePassive convenience helper asserts existence" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.passive-helper";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -135,7 +135,7 @@ test "queueDeclarePassive on a missing queue closes the channel" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.queueDeclarePassive("bunny-zig.test.passive-helper-missing");
     try testing.expectError(error.NotFound, result);
@@ -163,7 +163,7 @@ test "queueDeclarePassive: succeeds for a user with configure permission" {
         const setup_conn = try h.openTestConnection();
         defer setup_conn.deinit();
         const setup_ch = try setup_conn.openChannel();
-        defer setup_ch.closeChannel() catch {};
+        defer setup_ch.close();
         _ = try setup_ch.queueDeclare(queue_name, .{ .durable = true });
     }
     defer cleanupQueue(queue_name);
@@ -186,7 +186,7 @@ test "queueDeclarePassive: succeeds for a user with configure permission" {
     });
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const info = try ch.queueDeclarePassive(queue_name);
     try testing.expectEqualSlices(u8, queue_name, info.name);
@@ -206,7 +206,7 @@ test "queueDeclarePassive: a user with no permission on the queue is refused (40
         const setup_conn = try h.openTestConnection();
         defer setup_conn.deinit();
         const setup_ch = try setup_conn.openChannel();
-        defer setup_ch.closeChannel() catch {};
+        defer setup_ch.close();
         _ = try setup_ch.queueDeclare(queue_name, .{ .durable = true });
     }
     defer cleanupQueue(queue_name);
@@ -229,7 +229,7 @@ test "queueDeclarePassive: a user with no permission on the queue is refused (40
     });
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.queueDeclarePassive(queue_name);
     try testing.expectError(error.AccessRefused, result);
@@ -248,7 +248,7 @@ test "redeclaring a queue with mismatched durable raises a precondition error" {
     _ = try ch1.queueDeclare(q, .{ .durable = true });
 
     const ch2 = try conn.openChannel();
-    defer ch2.closeChannel() catch {};
+    defer ch2.close();
     const result = ch2.queueDeclare(q, .{ .durable = false });
     try testing.expectError(error.PreconditionFailed, result);
     try testing.expect(!ch2.isOpen());
@@ -264,7 +264,7 @@ test "declare and use a quorum queue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const qi = try ch.quorumQueue("bunny-zig.test.quorum");
     try testing.expect(qi.message_count == 0);
@@ -288,7 +288,7 @@ test "queue.purge does not remove unacknowledged messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.purge-unacked";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -321,7 +321,7 @@ test "passive declare reports message_count and consumer_count" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.counts";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

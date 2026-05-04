@@ -7,7 +7,7 @@ test "basic qos" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.basicQos(10, false);
 }
@@ -17,7 +17,7 @@ test "basic.qos with global=false caps deliveries per consumer" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.qos-per-consumer";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -51,7 +51,7 @@ test "basic.qos(0) means unlimited delivery" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.qos-zero";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

@@ -37,9 +37,9 @@ test "an error on one channel does not affect another channel" {
     defer conn.deinit();
 
     const ch1 = try conn.openChannel();
-    defer ch1.closeChannel() catch {};
+    defer ch1.close();
     const ch2 = try conn.openChannel();
-    defer ch2.closeChannel() catch {};
+    defer ch2.close();
 
     const result = ch1.queueDeclare("bunny-zig.test.no-such-isolation", .{ .passive = true });
     try testing.expectError(error.NotFound, result);
@@ -68,7 +68,7 @@ test "channel-level error closes the channel but leaves connection open" {
     defer conn.deinit();
 
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
     // Passive declare of a non-existent queue is a NOT_FOUND channel-level error.
     const result = ch.queueDeclare("bunny-zig.test.no-such-queue", .{ .passive = true });
     try testing.expectError(error.NotFound, result);
@@ -77,6 +77,6 @@ test "channel-level error closes the channel but leaves connection open" {
 
     // The connection should still be usable: open a new channel and do work on it.
     const ch2 = try conn.openChannel();
-    defer ch2.closeChannel() catch {};
+    defer ch2.close();
     _ = try ch2.queueDeclare("bunny-zig.test.after-channel-error", .{ .exclusive = true, .auto_delete = true });
 }

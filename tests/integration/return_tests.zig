@@ -50,7 +50,7 @@ test "basic.return: mandatory unroutable message reports exchange, routing_key, 
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
     ch.on_return = &Captured.handler;
 
     try ch.confirmSelect();
@@ -79,7 +79,7 @@ test "basic.return: multiple unroutable mandatory publishes each return separate
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
     ch.on_return = &Captured.handler;
 
     try ch.confirmSelect();

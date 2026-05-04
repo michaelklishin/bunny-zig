@@ -8,7 +8,7 @@ test "queue with x-message-ttl expires messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var qa = bunny.QueueArguments{};
     defer qa.deinit(h.test_allocator);
@@ -33,7 +33,7 @@ test "queue with x-max-length drops oldest messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var qa = bunny.QueueArguments{};
     defer qa.deinit(h.test_allocator);
@@ -73,7 +73,7 @@ test "queue with x-max-priority delivers higher priority first" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var qa = bunny.QueueArguments{};
     defer qa.deinit(h.test_allocator);
@@ -109,7 +109,7 @@ test "queue with x-expires auto-deletes after the timeout" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var qa = bunny.QueueArguments{};
     defer qa.deinit(h.test_allocator);

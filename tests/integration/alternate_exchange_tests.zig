@@ -9,7 +9,7 @@ test "alternate-exchange catches messages that would otherwise be unrouted" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const ae = "bunny-zig.test.ae.alternate";
     try ch.exchangeDeclare(ae, bunny.ExchangeType.fanout, .{ .auto_delete = true });

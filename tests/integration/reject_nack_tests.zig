@@ -7,7 +7,7 @@ test "reject and requeue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.reject", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();
@@ -40,7 +40,7 @@ test "nack with requeue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.nack", .{ .exclusive = true, .auto_delete = true });
     try ch.confirmSelect();

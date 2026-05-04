@@ -24,7 +24,7 @@ test "lastClose: NotFound on passive declare records reply text and offending me
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.queueDeclare("bunny-zig.test.typed-404", .{ .passive = true });
     try testing.expectError(error.NotFound, result);
@@ -44,13 +44,13 @@ test "lastClose: PreconditionFailed on inequivalent redeclare points at queue.de
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const owner_ch = try conn.openChannel();
-    defer owner_ch.closeChannel() catch {};
+    defer owner_ch.close();
     const q = "bunny-zig.test.typed-406";
     _ = try owner_ch.queueDeclare(q, .{ .durable = true });
     defer _ = owner_ch.queueDelete(q) catch {};
 
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
     const result = ch.queueDeclare(q, .{ .durable = false });
     try testing.expectError(error.PreconditionFailed, result);
 
@@ -66,7 +66,7 @@ test "typed errors: waitForConfirms surfaces NotFound when publishing to a missi
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.confirmSelect();
     try ch.publish("orphan", .{ .exchange = "bunny-zig.test.typed-no-such-ex", .routing_key = "k" });
@@ -87,14 +87,14 @@ test "typed errors: ResourceLocked when consuming from a peer-exclusive queue" {
     const owner = try h.openTestConnection();
     defer owner.deinit();
     const owner_ch = try owner.openChannel();
-    defer owner_ch.closeChannel() catch {};
+    defer owner_ch.close();
     const q = "bunny-zig.test.typed-405";
     _ = try owner_ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
 
     const peer = try h.openTestConnection();
     defer peer.deinit();
     const peer_ch = try peer.openChannel();
-    defer peer_ch.closeChannel() catch {};
+    defer peer_ch.close();
 
     const result = peer_ch.basicConsume(q, .manual);
     try testing.expectError(error.ResourceLocked, result);
@@ -108,7 +108,7 @@ test "typed errors: PreconditionFailed when acking an unknown delivery tag" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.typed-bad-ack";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

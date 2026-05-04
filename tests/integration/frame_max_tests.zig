@@ -32,7 +32,7 @@ test "frame_max: a body larger than frame_max is split across multiple body fram
     });
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.frame-max-split";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
@@ -92,7 +92,7 @@ test "frame_max: body sizes at and around the per-frame boundary roundtrip" {
     });
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.frame-max-boundary";
     _ = try ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });

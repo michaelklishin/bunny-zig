@@ -69,13 +69,15 @@ pub const Delivery = struct {
         return self.body;
     }
 
-    pub fn deinit(self: *Delivery, allocator: std.mem.Allocator) void {
+    /// Free the storage owned by this delivery. By value so `defer raw.deinit(...)`
+    /// works directly on a while-let capture without an intermediate `var`.
+    pub fn deinit(self: Delivery, allocator: std.mem.Allocator) void {
         allocator.free(self.consumer_tag);
         allocator.free(self.exchange);
         allocator.free(self.routing_key);
-        self.properties.deinitOwned(allocator);
+        var props = self.properties;
+        props.deinitOwned(allocator);
         if (self.body.len > 0) allocator.free(self.body);
-        self.* = undefined;
     }
 
     /// Reply to this RPC request via `ch`. See `Channel.respondTo`.
@@ -94,12 +96,12 @@ pub const GetResult = struct {
     properties: BasicProperties,
     body: []const u8,
 
-    pub fn deinit(self: *GetResult, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: GetResult, allocator: std.mem.Allocator) void {
         allocator.free(self.exchange);
         allocator.free(self.routing_key);
-        self.properties.deinitOwned(allocator);
+        var props = self.properties;
+        props.deinitOwned(allocator);
         if (self.body.len > 0) allocator.free(self.body);
-        self.* = undefined;
     }
 };
 
@@ -153,13 +155,13 @@ pub const ReturnedMessage = struct {
     properties: BasicProperties,
     body: []const u8,
 
-    pub fn deinit(self: *ReturnedMessage, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ReturnedMessage, allocator: std.mem.Allocator) void {
         allocator.free(self.reply_text);
         allocator.free(self.exchange);
         allocator.free(self.routing_key);
-        self.properties.deinitOwned(allocator);
+        var props = self.properties;
+        props.deinitOwned(allocator);
         if (self.body.len > 0) allocator.free(self.body);
-        self.* = undefined;
     }
 };
 
@@ -310,7 +312,7 @@ pub const Channel = struct {
         self.get_body.deinit(self.allocator);
         self.get_properties.deinitOwned(self.allocator);
         // Drop any deliveries the application never received.
-        for (self.deliveries.items[self.delivery_head..]) |*d| d.deinit(self.allocator);
+        for (self.deliveries.items[self.delivery_head..]) |d| d.deinit(self.allocator);
         self.deliveries.deinit(self.allocator);
         self.confirm_promises.deinit();
         for (self.promise_pool.items) |p| self.allocator.destroy(p);
@@ -1145,6 +1147,14 @@ pub const Channel = struct {
     //
     // Channel lifecycle
     //
+
+    /// Close this channel gracefully, swallowing errors. Mirrors
+    /// `Connection.close()` and is the form most callers want for
+    /// `defer ch.close();`. Use `closeChannel()` when the caller needs
+    /// the AMQP-level error code.
+    pub fn close(self: *Channel) void {
+        self.closeChannel() catch {};
+    }
 
     /// Close this channel gracefully.
     pub fn closeChannel(self: *Channel) !void {

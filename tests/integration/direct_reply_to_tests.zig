@@ -16,9 +16,9 @@ test "direct reply-to: RPC roundtrip via amq.rabbitmq.reply-to" {
     defer conn.deinit();
 
     const server_ch = try conn.openChannel();
-    defer server_ch.closeChannel() catch {};
+    defer server_ch.close();
     const client_ch = try conn.openChannel();
-    defer client_ch.closeChannel() catch {};
+    defer client_ch.close();
 
     const rpc_queue = "bunny-zig.test.rpc-server";
     _ = try server_ch.queueDeclare(rpc_queue, .{ .exclusive = true, .auto_delete = true });

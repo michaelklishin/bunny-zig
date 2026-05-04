@@ -13,7 +13,7 @@ test "stream queue: x-stream-offset=first delivers history from the beginning" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const q = "bunny-zig.test.stream-offset-first";
     _ = try ch.streamQueue(q);

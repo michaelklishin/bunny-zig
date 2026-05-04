@@ -8,7 +8,7 @@ test "bind and unbind a queue" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.declareDirect("bunny-zig.test.bind-exchange");
     _ = try ch.queueDeclare("bunny-zig.test.bind-queue", .{ .exclusive = true, .auto_delete = true });
@@ -25,7 +25,7 @@ test "exchange-to-exchange binding" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.declareFanout("bunny-zig.test.e2e-source");
     try ch.declareFanout("bunny-zig.test.e2e-dest");
@@ -43,7 +43,7 @@ test "auto-delete source exchange is removed when its last binding goes away" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const src = "bunny-zig.test.auto-delete-source";
     const dst = "bunny-zig.test.auto-delete-dest";
@@ -57,7 +57,7 @@ test "auto-delete source exchange is removed when its last binding goes away" {
     // Once the source's only binding is gone, the broker auto-deletes it, so a
     // passive declare reports NOT_FOUND.
     const ch2 = try conn.openChannel();
-    defer ch2.closeChannel() catch {};
+    defer ch2.close();
     const result = ch2.exchangeDeclare(src, bunny.ExchangeType.fanout, .{ .passive = true });
     try testing.expectError(error.NotFound, result);
 }

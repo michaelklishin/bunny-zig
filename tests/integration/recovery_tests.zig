@@ -93,7 +93,7 @@ test "recovery: topology is replayed after reconnect" {
     _ = try ch.basicConsume("bunny-zig.test.recovery-q", .manual);
     const got = try ch.recvDelivery();
     try testing.expect(got != null);
-    var delivery = got.?;
+    const delivery = got.?;
     defer delivery.deinit(h.test_allocator);
     try testing.expectEqualSlices(u8, "recovery test message", delivery.body);
     try ch.basicAck(delivery.delivery_tag, false);

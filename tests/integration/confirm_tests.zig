@@ -7,7 +7,7 @@ test "publisher confirms: batch waitForConfirms" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.confirmSelect();
     try testing.expect(ch.confirm_mode);
@@ -32,7 +32,7 @@ test "publisher confirms: per-message tracking" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.confirmSelectWithOptions(.{ .tracking = true });
     try testing.expect(ch.confirm_tracking);
@@ -57,7 +57,7 @@ test "confirm.select is idempotent" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.confirmSelect();
     try ch.confirmSelect();
@@ -69,7 +69,7 @@ test "publishing to a non-existent exchange closes the channel" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.confirmSelect();
     try ch.publish("orphan", .{ .exchange = "bunny-zig.test.no-such-exchange", .routing_key = "k" });
@@ -87,7 +87,7 @@ test "publisher confirms: per-message tracking with backpressure" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     try ch.confirmSelectWithOptions(.{ .tracking = true, .outstanding_limit = 5 });
     try testing.expect(ch.confirm_tracking);

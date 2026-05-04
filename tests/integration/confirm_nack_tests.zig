@@ -9,7 +9,7 @@ test "publisher confirms: broker nacks a publish that overflows reject-publish" 
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var qa = bunny.QueueArguments{};
     defer qa.deinit(h.test_allocator);
@@ -36,7 +36,7 @@ test "publisher confirms: per-promise resolution distinguishes ack from nack" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     var qa = bunny.QueueArguments{};
     defer qa.deinit(h.test_allocator);

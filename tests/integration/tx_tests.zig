@@ -7,7 +7,7 @@ test "tx: commit publishes messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.tx-commit", .{ .exclusive = true, .auto_delete = true });
 
@@ -36,7 +36,7 @@ test "tx: rollback discards messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     _ = try ch.queueDeclare("bunny-zig.test.tx-rollback", .{ .exclusive = true, .auto_delete = true });
 

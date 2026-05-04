@@ -13,7 +13,7 @@ test "channel error taxonomy: NOT_FOUND (404) on passive declare of a missing qu
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.queueDeclare("bunny-zig.test.taxonomy.404", .{ .passive = true });
     try testing.expectError(error.NotFound, result);
@@ -31,13 +31,13 @@ test "channel error taxonomy: PRECONDITION_FAILED (406) on inequivalent redeclar
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch_owner = try conn.openChannel();
-    defer ch_owner.closeChannel() catch {};
+    defer ch_owner.close();
     const q = "bunny-zig.test.taxonomy.406";
     _ = try ch_owner.queueDeclare(q, .{ .durable = true });
     defer _ = ch_owner.queueDelete(q) catch {};
 
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const result = ch.queueDeclare(q, .{ .durable = false });
     try testing.expectError(error.PreconditionFailed, result);
@@ -53,14 +53,14 @@ test "channel error taxonomy: RESOURCE_LOCKED (405) on cross-connection exclusiv
     const owner = try h.openTestConnection();
     defer owner.deinit();
     const owner_ch = try owner.openChannel();
-    defer owner_ch.closeChannel() catch {};
+    defer owner_ch.close();
     const q = "bunny-zig.test.taxonomy.405";
     _ = try owner_ch.queueDeclare(q, .{ .exclusive = true, .auto_delete = true });
 
     const other = try h.openTestConnection();
     defer other.deinit();
     const other_ch = try other.openChannel();
-    defer other_ch.closeChannel() catch {};
+    defer other_ch.close();
 
     const result = other_ch.basicConsume(q, .manual);
     try testing.expectError(error.ResourceLocked, result);

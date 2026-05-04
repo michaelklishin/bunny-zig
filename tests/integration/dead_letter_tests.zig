@@ -9,7 +9,7 @@ test "dead-letter exchange receives rejected messages" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const dlx = "bunny-zig.test.dlx";
     try ch.exchangeDeclare(dlx, bunny.ExchangeType.fanout, .{ .auto_delete = true });
@@ -55,7 +55,7 @@ test "dead-letter exchange respects x-dead-letter-routing-key override" {
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     const dlx = "bunny-zig.test.dlx-routed";
     try ch.exchangeDeclare(dlx, bunny.ExchangeType.direct, .{ .auto_delete = true });
@@ -101,7 +101,7 @@ test "x-death header is bounded by distinct (queue, reason) pairs across cycles"
     const conn = try h.openTestConnection();
     defer conn.deinit();
     const ch = try conn.openChannel();
-    defer ch.closeChannel() catch {};
+    defer ch.close();
 
     // Two queues each dead-letter to the other's exchange; bouncing rejects
     // back and forth produces exactly two x-death entries (one per queue),
