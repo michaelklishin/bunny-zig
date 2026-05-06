@@ -12,31 +12,26 @@ test "recovery: reconnects after forced close" {
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 500,
-            .max_interval_ms = 2_000,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
     defer conn.deinit();
 
     try testing.expect(conn.isOpen());
-
-    // Allow stats to be emitted
-    h.sleepMs(1200);
-
     var http_client = try h.openHttpApiClient();
     defer http_client.deinit();
 
     h.forceCloseConnection(&http_client, conn_name);
 
     // Wait for the client to detect the closure and recover
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(conn.isOpen());
 }
@@ -50,8 +45,7 @@ test "recovery: topology is replayed after reconnect" {
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 500,
-            .max_interval_ms = 2_000,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
@@ -63,22 +57,19 @@ test "recovery: topology is replayed after reconnect" {
     _ = try ch.queueDeclare("bunny-zig.test.recovery-q", .{ .durable = true });
     _ = try ch.declareDirectExchange("bunny-zig.test.recovery-ex");
     try ch.queueBind("bunny-zig.test.recovery-q", "bunny-zig.test.recovery-ex", "test.key");
-
-    h.sleepMs(1200);
-
     var http_client = try h.openHttpApiClient();
     defer http_client.deinit();
 
     h.forceCloseConnection(&http_client, conn_name);
 
     // Wait for closure and recovery
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(conn.isOpen());
 
@@ -134,8 +125,7 @@ test "recovery: server-named queue is rebound using its new name" {
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 500,
-            .max_interval_ms = 2_000,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
@@ -151,20 +141,17 @@ test "recovery: server-named queue is rebound using its new name" {
     defer original.deinit(h.test_allocator);
     const original_name = original.name;
     try testing.expect(std.mem.startsWith(u8, original_name, "amq."));
-
-    h.sleepMs(1200);
-
     var http_client = try h.openHttpApiClient();
     defer http_client.deinit();
     h.forceCloseConnection(&http_client, conn_name);
 
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen() and Captured.new_len > 0) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(conn.isOpen());
 
@@ -189,8 +176,7 @@ test "recovery: basic.qos and consumer are replayed after reconnect" {
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 500,
-            .max_interval_ms = 2_000,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
@@ -204,20 +190,17 @@ test "recovery: basic.qos and consumer are replayed after reconnect" {
 
     try ch.basicQos(1, false);
     _ = try ch.basicConsumeWithTag(q, "bunny-zig.recovery-consumer", .manual);
-
-    h.sleepMs(1200);
-
     var http_client = try h.openHttpApiClient();
     defer http_client.deinit();
     h.forceCloseConnection(&http_client, conn_name);
 
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(conn.isOpen());
 
@@ -282,8 +265,7 @@ test "recovery: combined path, server-named queue plus consumer post-recovery de
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 500,
-            .max_interval_ms = 2_000,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
@@ -294,27 +276,24 @@ test "recovery: combined path, server-named queue plus consumer post-recovery de
     var original = try ch.queueDeclare("", .{ .durable = true, .auto_delete = true });
     defer original.deinit(h.test_allocator);
     try testing.expect(std.mem.startsWith(u8, original.name, "amq."));
-
-    h.sleepMs(1200);
-
     var http_client = try h.openHttpApiClient();
     defer http_client.deinit();
     h.forceCloseConnection(&http_client, conn_name);
 
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen() and Captured.new_len > 0) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(conn.isOpen());
     try testing.expect(Captured.new_len > 0);
     const new_name = Captured.new_name_buf[0..Captured.new_len];
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (ch.isOpen()) break;
-        h.sleepMs(100);
+        h.sleepMs(25);
     }
     try testing.expect(ch.isOpen());
 
@@ -365,8 +344,9 @@ test "recovery: emits recovery_failed after max_attempts is exhausted" {
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 50,
-            .max_interval_ms = 100,
+            // Tight interval here so the "max attempts exhausted" path settles
+            // quickly: each attempt fails immediately (port 1 has no listener).
+            .network_recovery_interval_ms = 100,
             .max_attempts = 2,
         },
     });

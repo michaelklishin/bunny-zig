@@ -75,10 +75,13 @@ pub fn openHttpApiClient() !api.Client {
 /// races with the broker and silently no-ops if the connection is not yet
 /// listed.
 pub fn forceCloseConnection(http_client: *api.Client, connection_name: []const u8) void {
+    // ~10 s total budget at 25 ms granularity. The connection may take a moment
+    // to show up in the management API after stats are first emitted, so the
+    // tight loop polls aggressively rather than relying on a fixed pre-sleep.
     var attempt: u32 = 0;
-    while (attempt < 40) : (attempt += 1) {
+    while (attempt < 400) : (attempt += 1) {
         const conns = (http_client.listConnections() catch {
-            sleepMs(250);
+            sleepMs(25);
             continue;
         }).value;
         for (conns) |ci| {
@@ -86,11 +89,11 @@ pub fn forceCloseConnection(http_client: *api.Client, connection_name: []const u
             const cn = cp.connection_name orelse continue;
             if (std.mem.eql(u8, cn, connection_name)) {
                 http_client.closeConnection(ci.name, "closed by bunny-zig tests", true) catch {};
-                sleepMs(500);
+                sleepMs(25);
                 return;
             }
         }
-        sleepMs(250);
+        sleepMs(25);
     }
 }
 

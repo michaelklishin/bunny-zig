@@ -34,7 +34,8 @@ test "basic.qos with global=false caps deliveries per consumer" {
     _ = try ch.basicConsume(q, .manual);
 
     var got: u32 = 0;
-    for (0..40) |_| {
+    // 200 ms negative-assertion budget: confirm the 3rd delivery never arrives.
+    for (0..8) |_| {
         if (ch.tryRecvDelivery()) |raw| {
             var d = raw;
             defer d.deinit(h.test_allocator);

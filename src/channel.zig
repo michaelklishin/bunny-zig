@@ -1272,8 +1272,8 @@ pub const Channel = struct {
             return;
         };
 
-        // Wait for close-ok with a short timeout
-        _ = self.awaitMethodTimeout(5 * std.time.ns_per_s) catch null;
+        // Wait for close-ok within the connection's continuation timeout.
+        _ = self.awaitMethodTimeout(self.connection.continuationTimeoutNs()) catch null;
         self.is_open.store(false, .release);
         self.connection.removeChannel(self.id);
     }

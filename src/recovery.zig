@@ -9,15 +9,12 @@ const log = std.log.scoped(.bunny_recovery);
 
 pub const RecoveryConfig = struct {
     enabled: bool = true,
-    initial_interval_ms: u64 = 5_000,
-    max_interval_ms: u64 = 60_000,
-    backoff_multiplier: f64 = 2.0,
+    /// Periodic delay between reconnection attempts. Matches the
+    /// `network_recovery_interval` (Ruby Bunny) / `NetworkRecoveryInterval`
+    /// (RabbitMQ Java client) semantics: a single fixed interval, no backoff.
+    network_recovery_interval_ms: u64 = 5_000,
     /// null means unlimited attempts
     max_attempts: ?u32 = null,
-    /// Random jitter as a fraction of the base backoff, applied per attempt to
-    /// avoid thundering herds during a coordinated reconnect (e.g. broker
-    /// restart). 0.0 disables jitter; 0.2 means up to 20% additional delay.
-    jitter_fraction: f64 = 0.0,
 };
 
 pub const TopologyEntry = union(enum) {
@@ -331,62 +328,12 @@ pub const TopologyRegistry = struct {
     }
 };
 
-/// Calculate the next backoff interval in milliseconds (deterministic base).
-pub fn nextBackoff(attempt: u32, config: RecoveryConfig) u64 {
-    var interval: f64 = @floatFromInt(config.initial_interval_ms);
-    for (0..attempt) |_| {
-        interval *= config.backoff_multiplier;
-    }
-    const max: f64 = @floatFromInt(config.max_interval_ms);
-    if (interval > max) interval = max;
-    return @intFromFloat(interval);
-}
-
-/// Apply additive jitter on top of a base backoff. The result is in
-/// [base_ms, base_ms * (1 + jitter_fraction)]. Clamps `jitter_fraction` to
-/// [0, 1] so a misconfigured value cannot multiply the backoff arbitrarily.
-pub fn applyJitter(base_ms: u64, jitter_fraction: f64, random: std.Random) u64 {
-    if (base_ms == 0) return 0;
-    const f = std.math.clamp(jitter_fraction, 0.0, 1.0);
-    if (f == 0.0) return base_ms;
-    const base: f64 = @floatFromInt(base_ms);
-    const extra = base * f * random.float(f64);
-    return base_ms + @as(u64, @intFromFloat(extra));
-}
-
 // Tests
 
-test "backoff: initial attempt" {
+test "recovery config defaults to a 5s periodic interval" {
     const config = RecoveryConfig{};
-    try std.testing.expectEqual(5_000, nextBackoff(0, config));
-}
-
-test "backoff: exponential growth" {
-    const config = RecoveryConfig{};
-    try std.testing.expectEqual(10_000, nextBackoff(1, config));
-    try std.testing.expectEqual(20_000, nextBackoff(2, config));
-    try std.testing.expectEqual(40_000, nextBackoff(3, config));
-}
-
-test "backoff: capped at max" {
-    const config = RecoveryConfig{};
-    try std.testing.expectEqual(60_000, nextBackoff(10, config));
-}
-
-test "backoff: jitter is zero by default" {
-    var prng = std.Random.DefaultPrng.init(0);
-    try std.testing.expectEqual(5_000, applyJitter(5_000, 0.0, prng.random()));
-}
-
-test "backoff: jitter stays within [base, base * (1 + fraction)]" {
-    var prng = std.Random.DefaultPrng.init(42);
-    const base: u64 = 1_000;
-    const fraction: f64 = 0.2;
-    for (0..200) |_| {
-        const jittered = applyJitter(base, fraction, prng.random());
-        try std.testing.expect(jittered >= base);
-        try std.testing.expect(jittered <= 1_200);
-    }
+    try std.testing.expectEqual(@as(u64, 5_000), config.network_recovery_interval_ms);
+    try std.testing.expectEqual(@as(?u32, null), config.max_attempts);
 }
 
 test "topology registry: records and clears" {

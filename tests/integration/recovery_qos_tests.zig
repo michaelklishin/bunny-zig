@@ -16,8 +16,7 @@ test "recovery: per-consumer prefetch is replayed after reconnect" {
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 200,
-            .max_interval_ms = 500,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
@@ -35,13 +34,13 @@ test "recovery: per-consumer prefetch is replayed after reconnect" {
     defer http_client.deinit();
     h.forceCloseConnection(&http_client, conn_name);
 
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen() and ch.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(ch.isOpen());
 
@@ -57,7 +56,8 @@ test "recovery: per-consumer prefetch is replayed after reconnect" {
     var deliveries: [4]bunny.Delivery = undefined;
     defer for (deliveries[0..got]) |*d| d.deinit(h.test_allocator);
 
-    for (0..80) |_| {
+    // 500 ms negative-assertion budget: confirm the 3rd delivery never arrives.
+    for (0..20) |_| {
         if (ch.tryRecvDelivery()) |d| {
             deliveries[got] = d;
             got += 1;

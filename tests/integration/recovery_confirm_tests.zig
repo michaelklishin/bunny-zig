@@ -19,8 +19,7 @@ test "recovery: post-recovery publishes confirm under confirm.select" {
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 200,
-            .max_interval_ms = 500,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
@@ -39,13 +38,13 @@ test "recovery: post-recovery publishes confirm under confirm.select" {
     defer http_client.deinit();
     h.forceCloseConnection(&http_client, conn_name);
 
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen() and ch.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(conn.isOpen());
     try testing.expect(ch.isOpen());
@@ -68,8 +67,7 @@ test "recovery: many confirmed publishes after reconnect line up with the broker
         .connection_name = conn_name,
         .recovery = .{
             .enabled = true,
-            .initial_interval_ms = 200,
-            .max_interval_ms = 500,
+            .network_recovery_interval_ms = 500,
             .max_attempts = 5,
         },
     });
@@ -92,13 +90,13 @@ test "recovery: many confirmed publishes after reconnect line up with the broker
     defer http_client.deinit();
     h.forceCloseConnection(&http_client, conn_name);
 
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (!conn.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
-    for (0..40) |_| {
+    for (0..400) |_| {
         if (conn.isOpen() and ch.isOpen()) break;
-        h.sleepMs(250);
+        h.sleepMs(25);
     }
     try testing.expect(ch.isOpen());
 

@@ -251,9 +251,6 @@ pub const Connection = struct {
     // Topology tracking for recovery
     topology: recovery_mod.TopologyRegistry = undefined,
 
-    // PRNG for recovery backoff jitter. Only touched from the reader thread.
-    recovery_prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0),
-
     // Blocked state. blocked_reason is allocator-owned because the source slice
     // points into the transport's read buffer, which is reused on the next frame.
     blocked_mutex: Mutex = .init,
@@ -276,15 +273,12 @@ pub const Connection = struct {
         const conn = try allocator.create(Connection);
         errdefer allocator.destroy(conn);
 
-        const now_ns: i96 = Io.Clock.awake.now(getIo()).nanoseconds;
-        const seed: u64 = @bitCast(@as(i64, @truncate(now_ns)));
         conn.* = .{
             .allocator = allocator,
             .transport = transport,
             .options = options,
             .channels = std.AutoHashMap(u16, *Channel).init(allocator),
             .topology = recovery_mod.TopologyRegistry.init(allocator),
-            .recovery_prng = std.Random.DefaultPrng.init(seed),
         };
 
         try conn.performHandshake();
@@ -542,6 +536,8 @@ pub const Connection = struct {
         }
 
         self.is_open.store(false, .release);
+        // Wake any thread parked in waitForRpc: no more frames will arrive.
+        self.rpc_signal.broadcast(getIo());
     }
 
     fn attemptRecovery(self: *Connection) void {
@@ -571,10 +567,9 @@ pub const Connection = struct {
 
         var attempt: u32 = 0;
         while (config.max_attempts == null or attempt < config.max_attempts.?) {
-            const base_ms = recovery_mod.nextBackoff(attempt, config);
-            const backoff_ms = recovery_mod.applyJitter(base_ms, config.jitter_fraction, self.recovery_prng.random());
-            log.info("recovery attempt {d}, waiting {d}ms", .{ attempt + 1, backoff_ms });
-            getIo().sleep(.{ .nanoseconds = @intCast(backoff_ms * std.time.ns_per_ms) }, .boot) catch {};
+            const interval_ms = config.network_recovery_interval_ms;
+            log.info("recovery attempt {d}, waiting {d}ms", .{ attempt + 1, interval_ms });
+            getIo().sleep(.{ .nanoseconds = @intCast(interval_ms * std.time.ns_per_ms) }, .boot) catch {};
 
             const transport = resolveAndConnect(self.allocator, self.options) catch |err| {
                 log.warn("recovery attempt {d} failed: {}", .{ attempt + 1, err });
@@ -920,6 +915,9 @@ pub const Connection = struct {
         defer self.rpc_mutex.unlock(io);
 
         while (self.rpc_response == null) {
+            // Bail out as soon as the connection is observed closed: there will
+            // be no further frames to dispatch into rpc_response.
+            if (!self.is_open.load(.acquire)) return error.NotConnected;
             const elapsed = Io.Timestamp.now(io, .boot).nanoseconds - start.nanoseconds;
             if (elapsed >= limit) return error.Timeout;
             const remaining = limit - elapsed;

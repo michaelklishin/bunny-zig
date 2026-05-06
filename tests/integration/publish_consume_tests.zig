@@ -1,4 +1,5 @@
 const std = @import("std");
+const bunny = @import("bunny");
 const h = @import("test_helpers.zig");
 const testing = h.testing;
 const BasicProperties = h.BasicProperties;
@@ -137,9 +138,9 @@ test "publish and consume large message spanning multiple frames" {
     defer queue.deinit(h.test_allocator);
     try ch.confirmSelect();
 
-    // Build a message larger than the negotiated frame_max (typically 131072)
-    // to force multi-frame body encoding.
-    const body_size = conn.negotiated_frame_max * 2;
+    // Just-over-the-frame-boundary body forces multi-frame body encoding while
+    // keeping the payload small enough that the test stays fast.
+    const body_size: usize = @as(usize, conn.negotiated_frame_max) + 256;
     const body = try std.heap.page_allocator.alloc(u8, body_size);
     defer std.heap.page_allocator.free(body);
     @memset(body, 'A');
