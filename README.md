@@ -1,8 +1,7 @@
 # bunny-zig
 
-A Zig client library for [RabbitMQ](https://rabbitmq.com) that implements AMQP 0-9-1.
-
-Heavily inspired by [Ruby Bunny](https://github.com/ruby-amqp/bunny),
+This is a Zig client library for [RabbitMQ](https://rabbitmq.com)
+that's heavily inspired by [Ruby Bunny](https://github.com/ruby-amqp/bunny),
 [`bunny-swift`](https://github.com/michaelklishin/bunny-swift),
 and [`bunny-rs`](https://github.com/michaelklishin/bunny-rs) (Rust).
 
