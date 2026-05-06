@@ -33,7 +33,6 @@ test {
     _ = @import("integration/recovery_qos_tests.zig");
     _ = @import("integration/consumer_helpers_tests.zig");
     _ = @import("integration/tls_tests.zig");
-    _ = @import("integration/connection_blocked_tests.zig");
     _ = @import("integration/return_tests.zig");
     _ = @import("integration/direct_reply_to_tests.zig");
     _ = @import("integration/frame_max_tests.zig");

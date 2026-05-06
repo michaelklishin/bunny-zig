@@ -20,5 +20,13 @@
             .url = "https://github.com/ianic/tls.zig/archive/refs/heads/main.tar.gz",
             .hash = "tls-0.1.0-ER2e0lWpBQBMRW-oQxwuf5xqwPGor7Vs_W_xQdUHx7Qu",
         },
+        .proptest = .{
+            .url = "https://github.com/michaelklishin/proptest-zig/archive/refs/tags/v0.5.0.tar.gz",
+            .hash = "proptest-0.5.0-_GA2m_WOAQCxB73yCtolGqKufs39NkNg6TJlJHdtZqu0",
+        },
+        .rabbitmq_http_api_client = .{
+            .url = "https://github.com/michaelklishin/rabbitmq-http-api-zig/archive/refs/tags/v0.5.0.tar.gz",
+            .hash = "rabbitmq_http_api_client-0.5.0-tg40x5ESBACYqY3RwCaRXv8h2esDmymSJNm416r8_vMv",
+        },
     },
 }

@@ -15,12 +15,17 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // HTTP API client for integration tests (local path dependency)
-    const http_api_mod = b.createModule(.{
-        .root_source_file = .{ .cwd_relative = "../rabbitmq-http-api-client-zig.git/src/root.zig" },
+    const http_api_dep = b.dependency("rabbitmq_http_api_client", .{
         .target = target,
         .optimize = optimize,
     });
+    const http_api_mod = http_api_dep.module("rabbitmq_http_api_client");
+
+    const proptest_dep = b.dependency("proptest", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const proptest_mod = proptest_dep.module("proptest");
 
     const unit_test_mod = b.createModule(.{
         .root_source_file = b.path("src/bunny.zig"),
@@ -44,6 +49,18 @@ pub fn build(b: *std.Build) void {
     const tests_unit = b.addTest(.{ .root_module = tests_unit_mod });
     const run_tests_unit = b.addRunArtifact(tests_unit);
 
+    const tests_prop_mod = b.createModule(.{
+        .root_source_file = b.path("tests/prop_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "bunny", .module = bunny_mod },
+            .{ .name = "proptest", .module = proptest_mod },
+        },
+    });
+    const tests_prop = b.addTest(.{ .root_module = tests_prop_mod });
+    const run_tests_prop = b.addRunArtifact(tests_prop);
+
     const integration_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/integration_test.zig"),
         .target = target,
@@ -56,12 +73,30 @@ pub fn build(b: *std.Build) void {
     const integration_tests = b.addTest(.{ .root_module = integration_test_mod });
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
+    const slow_integration_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/slow_integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "bunny", .module = bunny_mod },
+            .{ .name = "rabbitmq_http_api_client", .module = http_api_mod },
+        },
+    });
+    const slow_integration_tests = b.addTest(.{ .root_module = slow_integration_test_mod });
+    const run_slow_integration_tests = b.addRunArtifact(slow_integration_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_tests_unit.step);
 
+    const prop_test_step = b.step("prop-test", "Run property-based tests (proptest-zig)");
+    prop_test_step.dependOn(&run_tests_prop.step);
+
     const integration_test_step = b.step("integration-test", "Run integration tests (requires RabbitMQ)");
     integration_test_step.dependOn(&run_integration_tests.step);
+
+    const slow_integration_test_step = b.step("slow-integration-test", "Run integration tests that need rabbitmqctl (BUNNY_RABBITMQCTL must be set)");
+    slow_integration_test_step.dependOn(&run_slow_integration_tests.step);
 
     const bench_exe = b.addExecutable(.{
         .name = "publish-throughput",

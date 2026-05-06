@@ -15,7 +15,23 @@ zig build
 zig build test
 
 zig build test -- --test-filter "pattern"
+
+zig build prop-test
+
+zig build integration-test
+
+zig build slow-integration-test
 ```
+
+`integration-test` runs the full suite against a live broker reachable
+via the HTTP API. `slow-integration-test` runs the smaller suite of
+tests that need access to local CLI tools (`rabbitmqctl` to lower the
+memory high watermark and provoke `connection.blocked`); set
+`BUNNY_RABBITMQCTL` to the binary path before invoking it.
+
+`prop-test` runs the property-based suite under `tests/prop/`, driven by
+[proptest-zig](https://github.com/michaelklishin/proptest-zig). Each file
+follows the `*_prop_tests.zig` convention.
 
 ### Test Node Configuration
 
@@ -29,7 +45,9 @@ Unit tests (protocol encoding/decoding, field tables, properties) do not require
  * `src/`: contains the Zig source code
    * `src/protocol/`: AMQP 0-9-1 wire format: frame codec, method definitions, field tables, properties
    * `src/`: connection, channel, exchange, queue, consumer, transport, recovery
- * `tests/`: contains integration tests that require a running RabbitMQ node
+ * `tests/unit/`: example-based unit tests (no broker required)
+ * `tests/prop/`: property-based tests using proptest-zig (no broker required)
+ * `tests/integration/`: integration tests that require a running RabbitMQ node
 
 
 ## Key Files
@@ -64,9 +82,9 @@ Unit tests (protocol encoding/decoding, field tables, properties) do not require
 ## Tests
 
  * Tests should be descriptive and easy to read
- * Use property-based style tests (roundtrip encode/decode) for protocol types
- * Integration tests go in `tests/` and require a running RabbitMQ node
- * Unit tests for protocol encoding/decoding are inline (`test` blocks) next to the implementation
+ * Use property-based style tests (roundtrip encode/decode) for protocol types; the dedicated suite under `tests/prop/` uses [proptest-zig](https://github.com/michaelklishin/proptest-zig) and follows the `*_prop_tests.zig` filename convention
+ * Integration tests go in `tests/integration/` and require a running RabbitMQ node
+ * Example-based unit tests live in `tests/unit/`; tests for protocol encoding/decoding are also inline (`test` blocks) next to the implementation
  * Use `std.testing.expectEqual`, `std.testing.expect`, and `std.testing.expectEqualSlices` for assertions
 
 

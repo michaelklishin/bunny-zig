@@ -153,8 +153,6 @@ test "queueDeclarePassive: succeeds for a user with configure permission" {
     const _t = h.TestTimer.start("queueDeclarePassive: succeeds for a user with configure permission");
     defer _t.stop();
 
-    if (!h.runRabbitmqctl(&.{"status"})) return error.SkipZigTest;
-
     const username = "bunny-zig.passive-configure";
     const password = "passive-configure-pw";
     const queue_name = "bunny-zig.test.passive-configure-q";
@@ -168,14 +166,14 @@ test "queueDeclarePassive: succeeds for a user with configure permission" {
     }
     defer cleanupQueue(queue_name);
 
-    _ = h.runRabbitmqctl(&.{ "delete_user", username });
-    if (!h.runRabbitmqctl(&.{ "add_user", username, password })) return error.SkipZigTest;
-    defer _ = h.runRabbitmqctl(&.{ "delete_user", username });
-    // Grant configure-only on the default vhost: any permission, including
+    var http_client = try h.openHttpApiClient();
+    defer http_client.deinit();
+    http_client.deleteUser(username, true) catch {};
+    try http_client.createUser(username, .{ .password = password, .tags = "" });
+    defer http_client.deleteUser(username, true) catch {};
+    // Configure-only on the default vhost: any permission, including
     // configure, satisfies passive declare on RabbitMQ 4.3.0+.
-    if (!h.runRabbitmqctl(&.{ "set_permissions", "-p", "/", username, ".*", "^$", "^$" })) {
-        return error.SkipZigTest;
-    }
+    try http_client.grantPermissions("/", username, .{ .configure = ".*", .write = "^$", .read = "^$" });
 
     const conn = try bunny.Connection.open(h.test_allocator, .{
         .host = h.testHost(),
@@ -196,8 +194,6 @@ test "queueDeclarePassive: a user with no permission on the queue is refused (40
     const _t = h.TestTimer.start("queueDeclarePassive: a user with no permission on the queue is refused (403)");
     defer _t.stop();
 
-    if (!h.runRabbitmqctl(&.{"status"})) return error.SkipZigTest;
-
     const username = "bunny-zig.passive-nopermission";
     const password = "passive-nopermission-pw";
     const queue_name = "bunny-zig.test.passive-nopermission-q";
@@ -211,14 +207,13 @@ test "queueDeclarePassive: a user with no permission on the queue is refused (40
     }
     defer cleanupQueue(queue_name);
 
-    _ = h.runRabbitmqctl(&.{ "delete_user", username });
-    if (!h.runRabbitmqctl(&.{ "add_user", username, password })) return error.SkipZigTest;
-    defer _ = h.runRabbitmqctl(&.{ "delete_user", username });
-    // Empty patterns on every kind: the user can connect but holds no permission
-    // on any resource in vhost "/".
-    if (!h.runRabbitmqctl(&.{ "set_permissions", "-p", "/", username, "^$", "^$", "^$" })) {
-        return error.SkipZigTest;
-    }
+    var http_client = try h.openHttpApiClient();
+    defer http_client.deinit();
+    http_client.deleteUser(username, true) catch {};
+    try http_client.createUser(username, .{ .password = password, .tags = "" });
+    defer http_client.deleteUser(username, true) catch {};
+    // The user can connect but holds no permission on any resource in vhost "/".
+    try http_client.grantPermissions("/", username, .{ .configure = "^$", .write = "^$", .read = "^$" });
 
     const conn = try bunny.Connection.open(h.test_allocator, .{
         .host = h.testHost(),
