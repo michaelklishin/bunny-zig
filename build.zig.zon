@@ -17,8 +17,8 @@
     },
     .dependencies = .{
         .tls = .{
-            .url = "https://github.com/ianic/tls.zig/archive/refs/heads/main.tar.gz",
-            .hash = "tls-0.1.0-ER2e0lWpBQBMRW-oQxwuf5xqwPGor7Vs_W_xQdUHx7Qu",
+            .url = "https://github.com/ianic/tls.zig/archive/819ae168d4ea191a768fa1542d66f31f2dcb8327.tar.gz",
+            .hash = "tls-0.1.0-ER2e0pGrBQDyyQ14DfnO03olbgccQGv_lwpUcUmizHcG",
         },
         .proptest = .{
             .url = "https://github.com/michaelklishin/proptest-zig/archive/refs/tags/v0.5.0.tar.gz",
