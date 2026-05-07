@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/integration_test.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
         .imports = &.{
             .{ .name = "bunny", .module = bunny_mod },
             .{ .name = "rabbitmq_http_api_client", .module = http_api_mod },
@@ -77,6 +78,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/slow_integration_test.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
         .imports = &.{
             .{ .name = "bunny", .module = bunny_mod },
             .{ .name = "rabbitmq_http_api_client", .module = http_api_mod },
