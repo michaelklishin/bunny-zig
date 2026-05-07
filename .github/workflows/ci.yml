@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit and property tests
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: zig build test
+        run: zig build test
+      - name: zig build prop-test
+        run: zig build prop-test
+
+  integration:
+    name: Integration tests
+    strategy:
+      fail-fast: false
+      matrix:
+        rabbitmq-series:
+          - "4.1"
+          - "4.2"
+    runs-on: ubuntu-latest
+
+    services:
+      rabbitmq:
+        image: rabbitmq:${{ matrix.rabbitmq-series }}-management
+        ports:
+          - 5672:5672
+          - 15672:15672
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Wait for RabbitMQ to start
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl await_startup --timeout 60; then
+              echo "RabbitMQ is ready"
+              exit 0
+            fi
+            echo "Waiting for container... ($i/30)"
+            sleep 2
+          done
+          echo "RabbitMQ failed to start. Container logs:"
+          docker logs ${{ job.services.rabbitmq.id }}
+          exit 1
+
+      - name: zig build integration-test
+        run: zig build integration-test
+
+  slow-integration:
+    name: Slow integration tests (rabbitmqctl)
+    strategy:
+      fail-fast: false
+      matrix:
+        rabbitmq-series:
+          - "4.1"
+          - "4.2"
+    runs-on: ubuntu-latest
+
+    services:
+      rabbitmq:
+        image: rabbitmq:${{ matrix.rabbitmq-series }}-management
+        ports:
+          - 5672:5672
+          - 15672:15672
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Wait for RabbitMQ to start
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec ${{ job.services.rabbitmq.id }} rabbitmqctl await_startup --timeout 60; then
+              echo "RabbitMQ is ready"
+              exit 0
+            fi
+            echo "Waiting for container... ($i/30)"
+            sleep 2
+          done
+          echo "RabbitMQ failed to start. Container logs:"
+          docker logs ${{ job.services.rabbitmq.id }}
+          exit 1
+
+      - name: zig build slow-integration-test
+        env:
+          BUNNY_RABBITMQCTL: DOCKER:${{ job.services.rabbitmq.id }}
+        run: zig build slow-integration-test
+
+  cross-compile:
+    name: Cross compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: zig build -Dtarget=aarch64-linux-gnu
+      - run: zig build -Dtarget=x86_64-linux-gnu
+      - run: zig build -Dtarget=aarch64-macos-none
+      - run: zig build -Dtarget=x86_64-macos-none

@@ -98,19 +98,34 @@ pub fn forceCloseConnection(http_client: *api.Client, connection_name: []const u
 }
 
 /// Resolve the rabbitmqctl binary, honoring BUNNY_RABBITMQCTL.
-fn rabbitmqctlPath() ?[]const u8 {
+fn rabbitmqctlValue() ?[]const u8 {
     const value = std.testing.environ.getPosix("BUNNY_RABBITMQCTL") orelse return null;
     return if (value.len > 0) value else null;
 }
 
 /// Invoke rabbitmqctl with the given arguments. Returns false if the binary
 /// is unavailable (BUNNY_RABBITMQCTL unset) or the command failed.
+///
+/// Accepts the Ruby Bunny convention `DOCKER:<container-id-or-name>`, which
+/// rewrites the invocation to `docker exec <container> rabbitmqctl <args...>`.
+/// Otherwise the value is treated as a path to the rabbitmqctl binary.
 pub fn runRabbitmqctl(args: []const []const u8) bool {
-    const ctl = rabbitmqctlPath() orelse return false;
+    const ctl = rabbitmqctlValue() orelse return false;
 
     var argv = std.ArrayList([]const u8).empty;
     defer argv.deinit(test_allocator);
-    argv.append(test_allocator, ctl) catch return false;
+
+    const docker_prefix = "DOCKER:";
+    if (std.mem.startsWith(u8, ctl, docker_prefix)) {
+        const container = ctl[docker_prefix.len..];
+        if (container.len == 0) return false;
+        argv.append(test_allocator, "docker") catch return false;
+        argv.append(test_allocator, "exec") catch return false;
+        argv.append(test_allocator, container) catch return false;
+        argv.append(test_allocator, "rabbitmqctl") catch return false;
+    } else {
+        argv.append(test_allocator, ctl) catch return false;
+    }
     argv.appendSlice(test_allocator, args) catch return false;
 
     var child = std.process.spawn(testing.io, .{
