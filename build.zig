@@ -53,6 +53,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/prop_test.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
         .imports = &.{
             .{ .name = "bunny", .module = bunny_mod },
             .{ .name = "proptest", .module = proptest_mod },
